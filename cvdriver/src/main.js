@@ -1,5 +1,30 @@
 import * as THREE from 'three';
 
+// Import and initialize Rapier physics
+let RAPIER, world, playerRigidBody, groundRigidBody;
+
+async function initPhysics() {
+    // Load Rapier from CDN
+    RAPIER = await import('https://cdn.skypack.dev/@dimforge/rapier3d-compat');
+    await RAPIER.init();
+
+    // Create physics world with gravity
+    const gravity = { x: 0.0, y: -9.81, z: 0.0 };
+    world = new RAPIER.World(gravity);
+
+    // Create ground physics body
+    const groundColliderDesc = RAPIER.ColliderDesc.cuboid(500, 0.1, 500);
+    const groundRigidBodyDesc = RAPIER.RigidBodyDesc.fixed();
+    groundRigidBody = world.createRigidBody(groundRigidBodyDesc);
+    world.createCollider(groundColliderDesc, groundRigidBody);
+
+    // Create player physics body
+    const playerColliderDesc = RAPIER.ColliderDesc.cuboid(0.5, 0.1, 0.5);
+    const playerRigidBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(0, 5, 0);
+    playerRigidBody = world.createRigidBody(playerRigidBodyDesc);
+    world.createCollider(playerColliderDesc, playerRigidBody);
+}
+
 // Add toggle button
 const toggleBtn = document.createElement('button');
 toggleBtn.textContent = 'Toggle Camera';
@@ -31,7 +56,7 @@ const playerSize = 1;
 const playerGeometry = new THREE.BoxGeometry(playerSize, 0.2, playerSize);
 const playerMaterial = new THREE.MeshBasicMaterial({ color: 0xff3333 });
 const player = new THREE.Mesh(playerGeometry, playerMaterial);
-player.position.set(0, 0.11, 0);
+player.position.set(0, 5, 0);
 scene.add(player);
 
 // Cameras
@@ -57,7 +82,7 @@ toggleBtn.addEventListener('click', () => {
 });
 
 // Movement
-const moveSpeed = 0.2;
+const moveSpeed = 2;
 const bounds = gridSize / 2 - playerSize / 2; // Large bounds for movement
 const keys = {};
 
@@ -69,13 +94,29 @@ window.addEventListener('keyup', (e) => {
 });
 
 function updatePlayerPosition() {
-    if (keys['ArrowUp']) player.position.z -= moveSpeed;
-    if (keys['ArrowDown']) player.position.z += moveSpeed;
-    if (keys['ArrowLeft']) player.position.x -= moveSpeed;
-    if (keys['ArrowRight']) player.position.x += moveSpeed;
+    if (!playerRigidBody) return;
 
-    player.position.x = Math.max(-bounds, Math.min(bounds, player.position.x));
-    player.position.z = Math.max(-bounds, Math.min(bounds, player.position.z));
+    const currentPos = playerRigidBody.translation();
+    const currentVel = playerRigidBody.linvel();
+
+    let newVelX = currentVel.x;
+    let newVelZ = currentVel.z;
+
+    if (keys['ArrowUp']) newVelZ = -moveSpeed * 10;
+    else if (keys['ArrowDown']) newVelZ = moveSpeed * 10;
+    else newVelZ = 0;
+
+    if (keys['ArrowLeft']) newVelX = -moveSpeed * 10;
+    else if (keys['ArrowRight']) newVelX = moveSpeed * 10;
+    else newVelX = 0;
+
+    // Check bounds
+    if (currentPos.x <= -bounds && newVelX < 0) newVelX = 0;
+    if (currentPos.x >= bounds && newVelX > 0) newVelX = 0;
+    if (currentPos.z <= -bounds && newVelZ < 0) newVelZ = 0;
+    if (currentPos.z >= bounds && newVelZ > 0) newVelZ = 0;
+
+    playerRigidBody.setLinvel({ x: newVelX, y: currentVel.y, z: newVelZ }, true);
 }
 
 function updatePlayerCamera() {
@@ -89,6 +130,19 @@ function updatePlayerCamera() {
 
 // Animation loop
 function animate() {
+    if (world && playerRigidBody) {
+        // Step physics simulation
+        world.step();
+
+        // Update player mesh position from physics body
+        const position = playerRigidBody.translation();
+        player.position.set(position.x, position.y, position.z);
+
+        // Update player rotation from physics body
+        const rotation = playerRigidBody.rotation();
+        player.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+    }
+
     updatePlayerPosition();
     if (usePlayerCamera) {
         updatePlayerCamera();
@@ -98,7 +152,11 @@ function animate() {
     }
     requestAnimationFrame(animate);
 }
-animate();
+
+// Initialize physics then start animation
+initPhysics().then(() => {
+    animate();
+});
 
 // Handle window resize
 window.addEventListener('resize', () => {
