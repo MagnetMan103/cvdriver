@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Car } from './playerobject.js';
 
 // Import and initialize Rapier physics
 let RAPIER, world, playerRigidBody, groundRigidBody;
@@ -76,13 +77,17 @@ function addRoadSegment(zPosition) {
 }
 
 initialRoad();
-// Player
-const playerSize = 1;
-const playerGeometry = new THREE.BoxGeometry(playerSize, 0.2, playerSize);
-const playerMaterial = new THREE.MeshBasicMaterial({ color: 0xff3333 });
-const player = new THREE.Mesh(playerGeometry, playerMaterial);
-player.position.set(0, 5, 0);
-scene.add(player);
+// Car (replaces previous red cube player)
+const car = new Car(scene);
+// For existing camera logic expecting `player`, alias to car group
+const player = car.carGroup;
+
+// Basic lighting for Car's Lambert materials
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+dirLight.position.set(5, 10, 2);
+scene.add(dirLight);
 
 // Cameras
 const overviewCamera = new THREE.PerspectiveCamera(
@@ -106,62 +111,34 @@ toggleBtn.addEventListener('click', () => {
     usePlayerCamera = !usePlayerCamera;
 });
 
-// Movement
-const moveSpeed = 2;
-const keys = {};
-
-window.addEventListener('keydown', (e) => {
-    keys[e.code] = true;
-});
-window.addEventListener('keyup', (e) => {
-    keys[e.code] = false;
-});
-
-function updatePlayerPosition() {
-    if (!playerRigidBody) return;
-
-    const currentPos = playerRigidBody.translation();
-    const currentVel = playerRigidBody.linvel();
-
-    let newVelX = currentVel.x;
-    let newVelZ = currentVel.z;
-
-    if (keys['ArrowUp']) newVelZ = -moveSpeed * 10;
-    else if (keys['ArrowDown']) newVelZ = moveSpeed * 10;
-    else newVelZ = 0;
-
-    if (keys['ArrowLeft']) newVelX = -moveSpeed * 10;
-    else if (keys['ArrowRight']) newVelX = moveSpeed * 10;
-    else newVelX = 0;
-
-    playerRigidBody.setLinvel({ x: newVelX, y: currentVel.y, z: newVelZ }, true);
-}
+// (Removed old cube movement; Car handles its own controls in playerobject.js)
 
 function updatePlayerCamera() {
-    playerCamera.position.set(
-        player.position.x,
-        player.position.y + 2,
-        player.position.z + 3
-    );
-    playerCamera.lookAt(player.position.x, player.position.y, player.position.z);
+    // Determine forward direction from car orientation (car faces -Z initially)
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(player.quaternion).normalize();
+    const heightOffset = 4;    // higher camera
+    const backDistance = 12;   // farther back for zoomed out view
+    const targetPos = player.position.clone()
+        .add(new THREE.Vector3(0, heightOffset, 0))
+        .add(forward.clone().multiplyScalar(-backDistance)); // move opposite forward to get behind
+    playerCamera.position.copy(targetPos);
+    playerCamera.lookAt(player.position);
 }
 
 // Animation loop
+let lastTime = performance.now();
 function animate() {
+    const now = performance.now();
+    const delta = (now - lastTime) / 1000;
+    lastTime = now;
+
     if (world && playerRigidBody) {
         // Step physics simulation
         world.step();
-
-        // Update player mesh position from physics body
-        const position = playerRigidBody.translation();
-        player.position.set(position.x, position.y, position.z);
-
-        // Update player rotation from physics body
-        const rotation = playerRigidBody.rotation();
-        player.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+        // (Player physics body removed; Car uses custom movement)
     }
-
-    updatePlayerPosition();
+    // Update car simulation
+    car.update(delta);
     if (usePlayerCamera) {
         updatePlayerCamera();
         renderer.render(scene, playerCamera);
