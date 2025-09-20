@@ -15,6 +15,13 @@ class Car {
         this.brakeForce = 25;
         this.friction = .985;
         this.turnSpeed = 2.5;
+    // Steering & grip model
+    this.minSteerFactor = 0.25; // floor steering at low speed
+    this.baseGrip = 2.0;        // low value keeps some lateral slide
+    this.maxGrip = 7.0;         // effective when car isn't sliding much
+    this.driftGripMultiplier = 0.3; // applied while handbrake held
+    this.driftSlipThreshold = 0.25; // above this slip treat as drift and reduce grip
+    this.handbrakeYawBoost = 1.2;   // extra steering rate when handbrake engaged
 
         // Control states
         this.controls = {
@@ -239,15 +246,38 @@ class Car {
         
         // Handle steering
         const speed = this.velocity.length();
-        if (speed > 0.1) {
+        // Allow steering even at low speed; scale effectiveness with speed
+        if (this.controls.left || this.controls.right) {
+            let steerFactor = Math.min(1, Math.max(this.minSteerFactor, speed / 8));
+            if (this.controls.handbrake) steerFactor *= (1 + this.handbrakeYawBoost);
             if (this.controls.left) {
-                this.rotation += this.turnSpeed * deltaTime;
+                this.rotation += this.turnSpeed * steerFactor * deltaTime;
                 this._lastSteerTime = performance.now() / 1000;
             }
             if (this.controls.right) {
-                this.rotation -= this.turnSpeed * deltaTime;
+                this.rotation -= this.turnSpeed * steerFactor * deltaTime;
                 this._lastSteerTime = performance.now() / 1000;
             }
+        }
+
+        // Dynamic grip that preserves some lateral velocity for drift
+        if (speed > 0.05) {
+            const forwardDir = forward.clone().normalize();
+            const forwardSpeed = this.velocity.dot(forwardDir);
+            const forwardComp = forwardDir.clone().multiplyScalar(forwardSpeed);
+            const lateralComp = this.velocity.clone().sub(forwardComp);
+            const lateralMag = lateralComp.length();
+            const slip = lateralMag / speed; // 0..1
+
+            // Grip grows when slip is low; drops when sliding or handbrake is active
+            let grip = THREE.MathUtils.lerp(this.maxGrip, this.baseGrip, slip); // more slip => closer to baseGrip
+            if (slip > this.driftSlipThreshold) grip *= 0.7; // slight extra reduction while actively sliding
+            if (this.controls.handbrake) grip *= this.driftGripMultiplier; // big reduction for intentional drift
+
+            // Convert grip to how much lateral we bleed this frame
+            const bleed = Math.min(1, grip * deltaTime);
+            lateralComp.multiplyScalar(1 - bleed);
+            this.velocity.copy(forwardComp.add(lateralComp));
         }
         
         // Update position
