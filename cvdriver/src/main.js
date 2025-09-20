@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {generateRoadSchematic} from "./mapgen.js";
 
 // Import and initialize Rapier physics
 let RAPIER, world, playerRigidBody, groundRigidBody;
@@ -9,14 +10,14 @@ async function initPhysics() {
     await RAPIER.init();
 
     // Create physics world with gravity
-    const gravity = { x: 0.0, y: -9.81, z: 0.0 };
+    const gravity = { x: 0.0, y: 0, z: 0.0 };
     world = new RAPIER.World(gravity);
 
     // Create ground physics body
-    const groundColliderDesc = RAPIER.ColliderDesc.cuboid(500, 0.1, 500);
-    const groundRigidBodyDesc = RAPIER.RigidBodyDesc.fixed();
-    groundRigidBody = world.createRigidBody(groundRigidBodyDesc);
-    world.createCollider(groundColliderDesc, groundRigidBody);
+    const groundColliderDesc = RAPIER.ColliderDesc.cuboid(2, 0.1, 10);
+    //const groundRigidBodyDesc = RAPIER.RigidBodyDesc.fixed();
+    //groundRigidBody = world.createRigidBody(groundRigidBodyDesc);
+    world.createCollider(groundColliderDesc);
 
     // Create player physics body
     const playerColliderDesc = RAPIER.ColliderDesc.cuboid(0.5, 0.1, 0.5);
@@ -33,6 +34,17 @@ toggleBtn.style.top = '10px';
 toggleBtn.style.left = '10px';
 document.body.appendChild(toggleBtn);
 
+const coordinatesCard = document.createElement('div');
+coordinatesCard.style.position = 'absolute';
+coordinatesCard.style.bottom = '10px';
+coordinatesCard.style.left = '10px';
+coordinatesCard.style.padding = '10px';
+coordinatesCard.style.backgroundColor = 'rgba(255, 255, 255, 0.8)';
+coordinatesCard.style.fontFamily = 'monospace';
+coordinatesCard.style.fontSize = '14px';
+coordinatesCard.textContent = 'Coordinates: (0, 0, 0)';
+document.body.appendChild(coordinatesCard);
+
 // Get the canvas element
 const canvas = document.getElementById('three-canvas');
 
@@ -45,37 +57,53 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xeeeeee);
 
 // Add large grid helper (black lines)
-const gridSize = 100;
-const gridDivisions = 100;
+const gridSize = 1000;
+const gridDivisions = 1000;
 const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0x000000, 0x000000);
 gridHelper.position.y = 0;
 scene.add(gridHelper);
 
-// Create a procedurally generated road
-function initialRoad() {
-    const roadWidth = 4;
-    const roadLength = 200;
-    const roadGeometry = new THREE.PlaneGeometry(roadWidth, roadLength);
-    const roadMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
-    const road = new THREE.Mesh(roadGeometry, roadMaterial);
-    road.rotation.x = -Math.PI / 2;
-    road.position.y = 0.01; // Slightly above the grid
-    scene.add(road);
-}
+// Track generated road segments to avoid duplicates
+const generatedSegments = new Set();
+let lastPlayerZ = 0;
+
 // used to generate new roads
-let lastRoadZ = 0;
-function addRoadSegment(zPosition) {
-    const roadWidth = 4;
+function addRoadSegment(x, y = 0, z, theta = 0) {
+    const roadWidth = 12;
     const roadLength = 20;
     const roadGeometry = new THREE.PlaneGeometry(roadWidth, roadLength);
     const roadMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
     const road = new THREE.Mesh(roadGeometry, roadMaterial);
     road.rotation.x = -Math.PI / 2;
-    road.position.set(0, 0.01, zPosition);
+    road.rotation.y = theta; // Apply rotation around Y axis for curves
+    road.position.set(x, y + 0.01, z);
     scene.add(road);
 }
 
-initialRoad();
+function setupNextFrame(x, y = 0, z, theta = 0) {
+    // Create unique key for this segment
+    const segmentKey = `${Math.round(x * 10)},${Math.round(z * 10)}`;
+
+    // Skip if already generated
+    if (generatedSegments.has(segmentKey)) {
+        return;
+    }
+    generatedSegments.add(segmentKey);
+
+    // Add the road segment
+    addRoadSegment(x, y, z, theta);
+
+    // Add grid helper for this section
+    const gridHelper = new THREE.GridHelper(100, 100, 0x000000, 0x000000);
+    gridHelper.position.set(x, 0, z);
+    scene.add(gridHelper);
+
+    // Add physics collider for this road segment
+    const roadColliderDesc = RAPIER.ColliderDesc.cuboid(2, 0.1, 10);
+    roadColliderDesc.setTranslation(x, y, z);
+    world.createCollider(roadColliderDesc, groundRigidBody);
+}
+
 // Player
 const playerSize = 1;
 const playerGeometry = new THREE.BoxGeometry(playerSize, 0.2, playerSize);
@@ -91,7 +119,7 @@ const overviewCamera = new THREE.PerspectiveCamera(
     0.1,
     1000
 );
-overviewCamera.position.set(0, 5, 10);
+overviewCamera.position.set(0, 20, 20);
 overviewCamera.lookAt(0, 0, 0);
 
 const playerCamera = new THREE.PerspectiveCamera(
@@ -107,7 +135,7 @@ toggleBtn.addEventListener('click', () => {
 });
 
 // Movement
-const moveSpeed = 2;
+const moveSpeed = 10;
 const keys = {};
 
 window.addEventListener('keydown', (e) => {
@@ -120,18 +148,17 @@ window.addEventListener('keyup', (e) => {
 function updatePlayerPosition() {
     if (!playerRigidBody) return;
 
-    const currentPos = playerRigidBody.translation();
     const currentVel = playerRigidBody.linvel();
 
     let newVelX = currentVel.x;
     let newVelZ = currentVel.z;
 
-    if (keys['ArrowUp']) newVelZ = -moveSpeed * 10;
-    else if (keys['ArrowDown']) newVelZ = moveSpeed * 10;
+    if (keys['ArrowUp'] || keys['KeyW']) newVelZ = -moveSpeed * 10;
+    else if (keys['ArrowDown'] || keys['KeyS']) newVelZ = moveSpeed * 10;
     else newVelZ = 0;
 
-    if (keys['ArrowLeft']) newVelX = -moveSpeed * 10;
-    else if (keys['ArrowRight']) newVelX = moveSpeed * 10;
+    if (keys['ArrowLeft'] || keys['KeyA']) newVelX = -moveSpeed * 10;
+    else if (keys['ArrowRight'] || keys['KeyD']) newVelX = moveSpeed * 10;
     else newVelX = 0;
 
     playerRigidBody.setLinvel({ x: newVelX, y: currentVel.y, z: newVelZ }, true);
@@ -143,11 +170,33 @@ function updatePlayerCamera() {
         player.position.y + 2,
         player.position.z + 3
     );
-    playerCamera.lookAt(player.position.x, player.position.y, player.position.z);
+    playerCamera.lookAt(player.position.x, player.position.y, player.position.z - 5);
+}
+let lastRoad = { x: 0, y: 0, z: 0, theta: 0 };
+function generateNewRoadSegments(x,y,z) {
+    try {
+        const roadPoints = generateRoadSchematic(x,y,z);
+        if (roadPoints && Array.isArray(roadPoints)) {
+            roadPoints.forEach(point => {
+                if (point && typeof point.x === 'number' && typeof point.z === 'number') {
+                    setupNextFrame(point.x, point.y || 0, point.z, point.theta || 0);
+                }
+            });
+        }
+        lastRoad = roadPoints[roadPoints.length - 1];
+    } catch (error) {
+        console.warn('Road generation failed:', error);
+        // Fallback: generate a simple straight road segment
+        const fallbackZ = lastPlayerZ - 50;
+        setupNextFrame(0, 0, fallbackZ, 0);
+    }
 }
 
 // Animation loop
 function animate() {
+    if (lastRoad.z === 0) {
+        generateNewRoadSegments(0, 0, 0);
+    }
     if (world && playerRigidBody) {
         // Step physics simulation
         world.step();
@@ -155,10 +204,29 @@ function animate() {
         // Update player mesh position from physics body
         const position = playerRigidBody.translation();
         player.position.set(position.x, position.y, position.z);
+        coordinatesCard.textContent = `Coordinates: (${position.x.toFixed(2)}, ${position.y.toFixed(
+            2
+        )}, ${position.z.toFixed(2)})`;
 
         // Update player rotation from physics body
         const rotation = playerRigidBody.rotation();
         player.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+
+        // Generate new road segments when player moves forward significantly
+        if (position.z < lastRoad.z + 100) {
+            lastPlayerZ = position.z;
+            generateNewRoadSegments(lastRoad.x, lastRoad.y, lastRoad.z);
+        }
+
+        // Update overview camera to follow player loosely
+        if (!usePlayerCamera) {
+            overviewCamera.position.set(
+                player.position.x,
+                player.position.y + 20,
+                player.position.z + 20
+            );
+            overviewCamera.lookAt(player.position.x, 0, player.position.z - 10);
+        }
     }
 
     updatePlayerPosition();
@@ -168,11 +236,7 @@ function animate() {
     } else {
         renderer.render(scene, overviewCamera);
     }
-    // Add new road segments as the player moves forward
-    if (player.position.z < lastRoadZ + 100) {
-        lastRoadZ -= 20;
-        addRoadSegment(lastRoadZ);
-    }
+
     requestAnimationFrame(animate);
 }
 
