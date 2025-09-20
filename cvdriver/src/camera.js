@@ -1,3 +1,9 @@
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import Chart from 'chart.js/auto';
+import { Hands } from '@mediapipe/hands';
+import { Camera } from '@mediapipe/camera_utils';
+
 // Main demo script: MediaPipe Hands + Three.js steering wheel + Chart.js graphs
 
 const video = document.getElementById('video');
