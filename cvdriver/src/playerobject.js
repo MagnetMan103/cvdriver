@@ -9,17 +9,13 @@ class Car {
         this.velocity = new THREE.Vector3(0, 0, 0);
         this.acceleration = new THREE.Vector3(0, 0, 0);
         this.rotation = 0; // Y-axis rotation
-        this.angularVelocity = 0;
-        
+
         // Car parameters
-        this.maxSpeed = 500;
         this.accelerationForce = 50;
         this.brakeForce = 25;
-        this.friction = 0.92;
+        this.friction = .985;
         this.turnSpeed = 2.5;
-        this.driftFactor = 0.85;
-        this.mass = 1;
-        
+
         // Control states
         this.controls = {
             forward: false,
@@ -269,7 +265,6 @@ class Car {
         // Slip = magnitude of lateral component / total speed
         const speed = this.velocity.length();
         if (speed < 0.001) return 0;
-        const velDir = this.velocity.clone().normalize();
         const forwardDir = forward.clone().normalize();
         const forwardSpeed = this.velocity.dot(forwardDir);
         const lateral = this.velocity.clone().sub(forwardDir.multiplyScalar(forwardSpeed));
