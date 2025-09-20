@@ -1,5 +1,6 @@
 // Main demo script: MediaPipe Hands + Three.js steering wheel + Chart.js graphs
-
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 const video = document.getElementById('video');
 const overlay = document.getElementById('overlay');
 const overlayCtx = overlay.getContext('2d');
@@ -53,36 +54,24 @@ function setupThree() {
   // C:\Users\willi\Desktop\handsOff\ai-steering-wheel-racing-nrg\source\SteeringWheel_NRG.glb
   const modelPath = './ai-steering-wheel-racing-nrg/source/SteeringWheel_NRG.glb';
 
-  let LoaderCtor = null;
-  // Try common locations for GLTFLoader when using non-module script tags
-  if (THREE && THREE.GLTFLoader) LoaderCtor = THREE.GLTFLoader;
-  else if (typeof GLTFLoader !== 'undefined') LoaderCtor = GLTFLoader;
-
-  if (LoaderCtor) {
-    try {
-      const loader = new LoaderCtor();
-      loader.load(modelPath, gltf => {
-        wheel = gltf.scene;
-        // tweak model so it is visible in our camera/scene
-        wheel.scale.setScalar(0.02);
-        wheel.userData = wheel.userData || {};
-        wheel.userData.baseScale = 0.02;
-        // ensure wheel faces camera initially
-        wheel.quaternion.copy(camera.quaternion);
-        wheel.rotation.x = Math.PI / 2; // orient wheel face-on if needed (model-specific)
-        wheel.position.set(0, 0, 0);
-        scene.add(wheel);
-        drawStatus('GLB loaded');
-      }, undefined, e => {
-        console.warn('Failed to load GLB model, creating fallback wheel (torus).', e);
-        createSteeringWheelMesh();
-      });
-    } catch (err) {
-      console.warn('Error constructing GLTFLoader:', err);
+  try {
+    const loader = new GLTFLoader();
+    loader.load(modelPath, gltf => {
+      wheel = gltf.scene;
+      wheel.scale.setScalar(0.02);
+      wheel.userData = wheel.userData || {};
+      wheel.userData.baseScale = 0.02;
+      wheel.quaternion.copy(camera.quaternion);
+      wheel.rotation.x = Math.PI / 2;
+      wheel.position.set(0, 0, 0);
+      scene.add(wheel);
+      drawStatus('GLB loaded');
+    }, undefined, e => {
+      console.warn('Failed to load GLB model, creating fallback wheel (torus).', e);
       createSteeringWheelMesh();
-    }
-  } else {
-    console.warn('GLTFLoader not found on this page - using fallback wheel');
+    });
+  } catch (err) {
+    console.warn('Error constructing GLTFLoader:', err);
     createSteeringWheelMesh();
   }
 

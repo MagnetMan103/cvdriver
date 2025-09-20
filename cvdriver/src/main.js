@@ -1,28 +1,27 @@
 import * as THREE from 'three';
 import { Car } from './playerobject.js';
 import { generateRoadSchematic } from "./mapgen.js";
+import RAPIER from '@dimforge/rapier3d-compat';
 
-// Import and initialize Rapier physics
-let RAPIER, world, playerRigidBody, groundRigidBody;
+let world; // Rapier world
+let car;   // Car instance
+let player; // Alias for car.carGroup for existing camera logic
 
-async function initPhysics() {
-    // Load Rapier from CDN
-    RAPIER = await import('https://cdn.skypack.dev/@dimforge/rapier3d-compat');
+async function init() {
     await RAPIER.init();
-
-    // Create physics world with gravity
-    const gravity = { x: 0.0, y: 0, z: 0.0 };
+    const gravity = { x: 0, y: 0, z: 0 }; // top-down view, no gravity
     world = new RAPIER.World(gravity);
 
-    // Create ground physics body
-    const groundColliderDesc = RAPIER.ColliderDesc.cuboid(2, 0.1, 10);
+    // Static ground collider (broad plane substitute)
+    const groundColliderDesc = RAPIER.ColliderDesc.cuboid(500, 0.1, 500).setTranslation(0, 0, 0);
     world.createCollider(groundColliderDesc);
 
-    // Create player physics body
-    const playerColliderDesc = RAPIER.ColliderDesc.cuboid(0.5, 0.1, 0.5);
-    const playerRigidBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(0, 5, 0);
-    playerRigidBody = world.createRigidBody(playerRigidBodyDesc);
-    world.createCollider(playerColliderDesc, playerRigidBody);
+    // Create car after world exists
+    car = new Car(scene, world, RAPIER);
+    player = car.carGroup;
+
+    // Start animation loop once physics & car are ready
+    animate();
 }
 
 // Add toggle button
@@ -203,10 +202,7 @@ function setupNextFrame(x, y = 0, z, angle = 0) {
     roadSegments.push({ x, y, z, angle });
 }
 
-// Car (replaces previous red cube player)
-const car = new Car(scene);
-// For existing camera logic expecting `player`, alias to car group
-const player = car.carGroup;
+// Car will be created in init() once physics world is ready
 
 // Basic lighting for Car's Lambert materials
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -236,6 +232,19 @@ let usePlayerCamera = false;
 toggleBtn.addEventListener('click', () => {
     usePlayerCamera = !usePlayerCamera;
 });
+
+// Simple control state debug panel
+const ctrlDebug = document.createElement('div');
+ctrlDebug.style.position = 'absolute';
+ctrlDebug.style.left = '10px';
+ctrlDebug.style.bottom = '10px';
+ctrlDebug.style.padding = '6px 8px';
+ctrlDebug.style.fontFamily = 'monospace';
+ctrlDebug.style.fontSize = '12px';
+ctrlDebug.style.background = 'rgba(0,0,0,0.4)';
+ctrlDebug.style.color = '#fff';
+ctrlDebug.style.whiteSpace = 'pre';
+document.body.appendChild(ctrlDebug);
 
 function updatePlayerCamera() {
     // Determine forward direction from car orientation (car faces -Z initially)
@@ -346,13 +355,12 @@ function animate() {
         generateNewRoadSegments(0, 0, 0);
     }
 
-    if (world && playerRigidBody) {
-        // Step physics simulation
-        world.step();
+    if (car) {
+        car.update(delta, world);
+        // Update control debug
+        const c = car.controls;
+        ctrlDebug.textContent = `W:${c.forward?'1':'0'} S:${c.backward?'1':'0'} A:${c.left?'1':'0'} D:${c.right?'1':'0'} HB:${c.handbrake?'1':'0'}\nSpeed:${car.velocity.length().toFixed(2)}`;
     }
-
-    // Update car simulation
-    car.update(delta);
 
     // Update coordinates display
     coordinatesCard.textContent = `Coordinates: (${player.position.x.toFixed(2)}, ${player.position.y.toFixed(2)}, ${player.position.z.toFixed(2)})`;
@@ -384,10 +392,8 @@ function animate() {
     requestAnimationFrame(animate);
 }
 
-// Initialize physics then start animation
-initPhysics().then(() => {
-    animate();
-});
+// Initialize physics & car
+init();
 
 // Handle window resize
 window.addEventListener('resize', () => {
