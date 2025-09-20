@@ -404,7 +404,6 @@ let lastTime = performance.now();
 function animate() {
     const now = performance.now();
     const delta = (now - lastTime) / 1000;
-    console.log(rData)
     lastTime = now;
 
     if (lastRoad.z === 0) {
