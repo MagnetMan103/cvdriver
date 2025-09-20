@@ -1,30 +1,32 @@
 import * as THREE from 'three';
 
 class Car {
-    constructor(scene) {
+    constructor(scene, world, rapier, params = {}) {
+        if (!world) throw new Error('Rapier world instance required: new Car(scene, world, rapier)');
+        if (!rapier) throw new Error('Pass shared RAPIER instance: new Car(scene, world, RAPIER)');
         this.scene = scene;
-        
-        // Car physical properties
-        this.position = new THREE.Vector3(0, 0.5, 0);
-        this.velocity = new THREE.Vector3(0, 0, 0);
-        this.acceleration = new THREE.Vector3(0, 0, 0);
-        this.rotation = 0; // Y-axis rotation
+        this.world = world;
+        this.RAPIER = rapier;
 
-        // Car parameters
-        this.accelerationForce = 50;
-        this.brakeForce = 25;
-        this.friction = .985;
+        // Visual orientation state (kept for convenience)
+        this.rotation = 0;
+
+        // Car parameters (tunable)
+        this.accelerationForce = 250; // boosted for clearer motion
+        this.brakeForce = 150;
         this.turnSpeed = 2.5;
+        this.minSteerFactor = 0.25;
+        this.baseGrip = 2.0;
+        this.maxGrip = 7.0;
+        this.driftGripMultiplier = 0.3;
+        this.driftSlipThreshold = 0.25;
+        this.handbrakeYawBoost = 1.2;
 
-    // Steering & grip model
-    this.minSteerFactor = 0.25; // floor steering at low speed
-    this.baseGrip = 2.0;        // low value keeps some lateral slide
-    this.maxGrip = 7.0;         // effective when car isn't sliding much
-    this.driftGripMultiplier = 0.3; // applied while handbrake held
-    this.driftSlipThreshold = 0.25; // above this slip treat as drift and reduce grip
-    this.handbrakeYawBoost = 1.2;   // extra steering rate when handbrake engaged
+        // Runtime vectors mirrored from physics each frame
+        this.position = new THREE.Vector3();
+        this.velocity = new THREE.Vector3();
+        this.acceleration = new THREE.Vector3(); // (kept for API compatibility, no longer integrated manually)
 
-        // Control states
         this.controls = {
             forward: false,
             backward: false,
@@ -32,41 +34,50 @@ class Car {
             right: false,
             handbrake: false
         };
-        
-        this.createCarMesh();
-        this.setupControls();
+        // External analog control (overrides keyboard when provided)
+        this.analog = {
+            steering: null, // -1..1
+            throttle: null  // 0..1 (positive only for now)
+        };
 
-        // Smoke particle parameters (tweakable)
+        this.createCarMesh();
+        this._createPhysicsBody();
+        this.setupControls();
+        this.exploded = false;
+        this.debris = [];
+        this.explodeOnAnyCollision = true;
+        this.minExplodeSpeed = 0; // m/s threshold before collision can trigger explosion
+
+        // Smoke system (unchanged)
         this.smokeParams = {
             enabled: true,
-            baseSpawnInterval: 0.01, // faster cycles for denser trail
-            minSpeed: 4, // minimum speed to emit
-            slipThreshold: 0.15, // lateral slip ratio to begin emission
-            particleLife: 0.7, // slightly shorter life for less lingering
+            baseSpawnInterval: 0.01,
+            minSpeed: 4,
+            slipThreshold: 0.15,
+            particleLife: 0.7,
             startSize: 0.28,
             endSize: 1.4,
-            upwardSpeed: 1.1, // increased base upward velocity
-            upwardAccel: 5, // stronger secondary upward acceleration during life
+            upwardSpeed: 1.1,
+            upwardAccel: 5,
             lateralDampen: 0.9,
             fadePower: 1.8,
-            maxParticlesPerCycle: 10, // allow more per cycle for density
-            slipToDensity: 18, // multiplier converting slip to target particles/sec
+            maxParticlesPerCycle: 10,
+            slipToDensity: 18,
             maxPoolSize: 250,
             colorVariance: 0.15,
             sizeJitter: 0.55,
             spinSpeed: 2.5,
-            stopGrace: 0.08, // seconds after steering release to still allow emission
-            baseSpread: 0.25, // tighter cluster baseline
-            slipSpreadFactor: 0.4, // additional spread per slip unit
-            rearWheelOffset: 1.5, // distance behind center to start emission
-            lateralWheelOffset: 1.1, // half-width to approximate wheel positions
-            lateralJitter: 0.5, // additional random lateral jitter scale
-            longitudinalJitter: 0.4, // random along forward/back jitter scale
-            shapeWobbleAmp: 0.25, // amplitude of non-uniform scaling wobble (0-~0.4)
+            stopGrace: 0.08,
+            baseSpread: 0.25,
+            slipSpreadFactor: 0.4,
+            rearWheelOffset: 1.5,
+            lateralWheelOffset: 1.1,
+            lateralJitter: 0.5,
+            longitudinalJitter: 0.4,
+            shapeWobbleAmp: 0.25,
             shapeWobbleFreqMin: 2.0,
             shapeWobbleFreqMax: 5.0
         };
-
         this._smokeTimeAccum = 0;
         this.smokeParticles = [];
         this._smokePool = [];
@@ -74,8 +85,29 @@ class Car {
         this._lastSteerTime = 0;
     }
 
+    static async initRapier() {
+        if (!Car._rapierReady) {
+            await RAPIER.init();
+            Car._rapierReady = true;
+        }
+    }
+
+    _createPhysicsBody() {
+        const RAPIER = this.RAPIER;
+        const rbDesc = RAPIER.RigidBodyDesc.dynamic()
+            .setTranslation(0, 2, 0)
+            .setCanSleep(false); // keep always awake while testing movement
+        this.body = this.world.createRigidBody(rbDesc);
+        const halfExtents = { x: 1.0, y: 1, z: 2.0 };
+        const colliderDesc = RAPIER.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
+            .setFriction(0.9)
+            .setRestitution(0.0);
+        this.collider = this.world.createCollider(colliderDesc, this.body);
+        this.body.setLinearDamping(0.15);
+        this.body.setAngularDamping(1.0);
+    }
+
     _initSmokeResources() {
-        // Create multiple irregular blobby grayscale textures for smoke variety
         const variantCount = 5;
         const size = 96;
         this.smokeTextures = [];
@@ -84,9 +116,7 @@ class Car {
             canvas.width = canvas.height = size;
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0,0,size,size);
-            // Fill transparent
-            // Draw several overlapping fuzzy blobs
-            const blobNum = 5 + Math.floor(Math.random()*4); // 5-8 blobs
+            const blobNum = 5 + Math.floor(Math.random()*4);
             for (let b=0; b<blobNum; b++) {
                 const cx = (0.3 + Math.random()*0.4) * size;
                 const cy = (0.3 + Math.random()*0.4) * size;
@@ -102,7 +132,6 @@ class Car {
                 ctx.arc(cx, cy, rad, 0, Math.PI*2);
                 ctx.fill();
             }
-            // Slight overall soft vignette to smooth edges
             const vignette = ctx.createRadialGradient(size/2, size/2, size*0.2, size/2, size/2, size*0.5);
             vignette.addColorStop(0, 'rgba(255,255,255,0.15)');
             vignette.addColorStop(1, 'rgba(255,255,255,0)');
@@ -113,25 +142,20 @@ class Car {
             texture.minFilter = THREE.LinearFilter;
             this.smokeTextures.push(texture);
         }
-        // Base material (map will be swapped per particle)
         this.smokeBaseMaterial = new THREE.SpriteMaterial({ map: this.smokeTextures[0], transparent: true, depthWrite: false });
     }
-    
+
     createCarMesh() {
-        // Create car body
         this.carGroup = new THREE.Group();
-        
-        // Main body
         const bodyGeometry = new THREE.BoxGeometry(2, 0.6, 4);
         const bodyMaterial = new THREE.MeshLambertMaterial({ color: 0xff4444 });
         const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
         bodyMesh.position.y = 0.3;
         bodyMesh.castShadow = true;
         this.carGroup.add(bodyMesh);
-        
-        // Windshield
+
         const windshieldGeometry = new THREE.BoxGeometry(1.8, 0.4, 1.5);
-        const windshieldMaterial = new THREE.MeshLambertMaterial({ 
+        const windshieldMaterial = new THREE.MeshLambertMaterial({
             color: 0x4444ff,
             transparent: true,
             opacity: 0.7
@@ -140,168 +164,307 @@ class Car {
         windshieldMesh.position.set(0, 0.7, 0.5);
         windshieldMesh.castShadow = true;
         this.carGroup.add(windshieldMesh);
-        
-        // Wheels
+
         const wheelGeometry = new THREE.CylinderGeometry(0.3, 0.3, 0.2, 8);
         const wheelMaterial = new THREE.MeshLambertMaterial({ color: 0x333333 });
-        
-        // Front wheels
+
         this.frontLeftWheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
         this.frontLeftWheel.position.set(-1.1, 0, 1.2);
         this.frontLeftWheel.rotation.z = Math.PI / 2;
         this.frontLeftWheel.castShadow = true;
         this.carGroup.add(this.frontLeftWheel);
-        
+
         this.frontRightWheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
         this.frontRightWheel.position.set(1.1, 0, 1.2);
         this.frontRightWheel.rotation.z = Math.PI / 2;
         this.frontRightWheel.castShadow = true;
         this.carGroup.add(this.frontRightWheel);
-        
-        // Rear wheels
+
         this.rearLeftWheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
         this.rearLeftWheel.position.set(-1.1, 0, -1.2);
         this.rearLeftWheel.rotation.z = Math.PI / 2;
         this.rearLeftWheel.castShadow = true;
         this.carGroup.add(this.rearLeftWheel);
-        
+
         this.rearRightWheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
         this.rearRightWheel.position.set(1.1, 0, -1.2);
         this.rearRightWheel.rotation.z = Math.PI / 2;
         this.rearRightWheel.castShadow = true;
         this.carGroup.add(this.rearRightWheel);
-        
-        // Add the car group to the scene
+
         this.scene.add(this.carGroup);
     }
-    
+
     setupControls() {
         document.addEventListener('keydown', (event) => {
             switch(event.code) {
                 case 'KeyW':
                 case 'ArrowUp':
+                    if (!this.controls.forward) console.debug('[Car] Forward pressed');
                     this.controls.forward = true;
                     break;
                 case 'KeyS':
                 case 'ArrowDown':
+                    if (!this.controls.backward) console.debug('[Car] Backward pressed');
                     this.controls.backward = true;
                     break;
                 case 'KeyA':
                 case 'ArrowLeft':
+                    if (!this.controls.left) console.debug('[Car] Left pressed');
                     this.controls.left = true;
                     break;
                 case 'KeyD':
                 case 'ArrowRight':
+                    if (!this.controls.right) console.debug('[Car] Right pressed');
                     this.controls.right = true;
                     break;
                 case 'Space':
+                    if (!this.controls.handbrake) console.debug('[Car] Handbrake pressed');
                     this.controls.handbrake = true;
                     event.preventDefault();
                     break;
             }
+            if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(event.code)) event.preventDefault();
         });
-        
         document.addEventListener('keyup', (event) => {
             switch(event.code) {
                 case 'KeyW':
                 case 'ArrowUp':
+                    if (this.controls.forward) console.debug('[Car] Forward released');
                     this.controls.forward = false;
                     break;
                 case 'KeyS':
                 case 'ArrowDown':
+                    if (this.controls.backward) console.debug('[Car] Backward released');
                     this.controls.backward = false;
                     break;
                 case 'KeyA':
                 case 'ArrowLeft':
+                    if (this.controls.left) console.debug('[Car] Left released');
                     this.controls.left = false;
                     break;
                 case 'KeyD':
                 case 'ArrowRight':
+                    if (this.controls.right) console.debug('[Car] Right released');
                     this.controls.right = false;
                     break;
                 case 'Space':
+                    if (this.controls.handbrake) console.debug('[Car] Handbrake released');
                     this.controls.handbrake = false;
                     break;
             }
+            if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(event.code)) event.preventDefault();
         });
     }
-    
-    update(deltaTime) {
-        // Calculate forward direction (inverted so initial forward is -Z to match existing map logic)
-        const forward = new THREE.Vector3(-Math.sin(this.rotation), 0, -Math.cos(this.rotation));
-        
-        // Handle acceleration/braking
-        if (this.controls.forward) {
-            this.acceleration.copy(forward).multiplyScalar(this.accelerationForce);
-        } else if (this.controls.backward) {
-            this.acceleration.copy(forward).multiplyScalar(-this.brakeForce);
+
+    _applyInputForces(deltaTime) {
+        // Obtain forward vector from current orientation
+        const rot = this.body.rotation();
+        const quat = new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w);
+        const forward = new THREE.Vector3(0,0,-1).applyQuaternion(quat).normalize();
+        const right = new THREE.Vector3(1,0,0).applyQuaternion(quat).normalize();
+
+        // Engine / brake with optional analog
+        let throttleInput = 0;
+        if (this.analog.throttle != null) {
+            throttleInput = Math.max(0, Math.min(1, this.analog.throttle));
         } else {
-            this.acceleration.set(0, 0, 0);
+            if (this.controls.forward) throttleInput += 1;
+            if (this.controls.backward) throttleInput -= 1; // supports simple reverse
         }
-        
-        // Apply acceleration
-        this.velocity.add(this.acceleration.clone().multiplyScalar(deltaTime));
-        if (this.velocity.length() > 60) {
-            this.velocity.setLength(60);
+        if (throttleInput !== 0) {
+            const impulse = forward.clone().multiplyScalar(this.accelerationForce * throttleInput * deltaTime);
+            this.body.applyImpulse(impulse, true);
         }
-        // Apply friction
-        this.velocity.multiplyScalar(this.friction);
-        
-        // Handle steering
-        const speed = this.velocity.length();
-        // Allow steering even at low speed; scale effectiveness with speed
-        if (this.controls.left || this.controls.right) {
+
+        // Steering via angular velocity (yaw) with optional analog
+        let steerInput = 0;
+        if (this.analog.steering != null) {
+            steerInput = Math.max(-1, Math.min(1, this.analog.steering));
+        } else {
+            if (this.controls.left) steerInput += 1;
+            if (this.controls.right) steerInput -= 1;
+        }
+
+        if (steerInput !== 0) {
+            this._lastSteerTime = performance.now() / 1000;
+        }
+
+
+
+        const linvel = this.body.linvel();
+        const velVec = new THREE.Vector3(linvel.x, linvel.y, linvel.z);
+        const speed = velVec.length();
+
+        if (speed > 0.05 && steerInput !== 0) {
             let steerFactor = Math.min(1, Math.max(this.minSteerFactor, speed / 8));
             if (this.controls.handbrake) steerFactor *= (1 + this.handbrakeYawBoost);
-            if (this.controls.left) {
-                this.rotation += this.turnSpeed * steerFactor * deltaTime;
-                this._lastSteerTime = performance.now() / 1000;
-            }
-            if (this.controls.right) {
-                this.rotation -= this.turnSpeed * steerFactor * deltaTime;
-                this._lastSteerTime = performance.now() / 1000;
-            }
+            const targetYawVel = steerInput * this.turnSpeed * steerFactor;
+            const angvel = this.body.angvel();
+            // Blend to target (simple approach)
+            const blend = 0.6;
+            const newYaw = THREE.MathUtils.lerp(angvel.y, targetYawVel, blend);
+            this.body.setAngvel({ x: angvel.x * 0.5, y: newYaw, z: angvel.z * 0.5 }, true);
+        }
+    }
+
+    // Allow external modules to set analog steering (-1..1) and throttle (0..1)
+    setAnalogControls(steering, throttle) {
+        this.analog.steering = steering;
+        this.analog.throttle = throttle;
+    }
+
+    _applyGripAndDrift(deltaTime) {
+        const linvel = this.body.linvel();
+        const speed = Math.sqrt(linvel.x*linvel.x + linvel.y*linvel.y + linvel.z*linvel.z);
+        if (speed < 0.05) {
+            // Still mirror velocity so UI shows small movement onset
+            this.velocity.set(linvel.x, linvel.y, linvel.z);
+            return;
         }
 
-        // Dynamic grip that preserves some lateral velocity for drift
-        if (speed > 0.05) {
-            const forwardDir = forward.clone().normalize();
-            const forwardSpeed = this.velocity.dot(forwardDir);
-            const forwardComp = forwardDir.clone().multiplyScalar(forwardSpeed);
-            const lateralComp = this.velocity.clone().sub(forwardComp);
-            const lateralMag = lateralComp.length();
-            const slip = lateralMag / speed; // 0..1
+        const rot = this.body.rotation();
+        const quat = new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w);
+        const forward = new THREE.Vector3(0,0,-1).applyQuaternion(quat).normalize();
 
-            // Grip grows when slip is low; drops when sliding or handbrake is active
-            let grip = THREE.MathUtils.lerp(this.maxGrip, this.baseGrip, slip); // more slip => closer to baseGrip
-            if (slip > this.driftSlipThreshold) grip *= 0.7; // slight extra reduction while actively sliding
-            if (this.controls.handbrake) grip *= this.driftGripMultiplier; // big reduction for intentional drift
+        const velVec = new THREE.Vector3(linvel.x, linvel.y, linvel.z);
+        const forwardSpeed = velVec.dot(forward);
+        const forwardComp = forward.clone().multiplyScalar(forwardSpeed);
+        const lateralComp = velVec.clone().sub(forwardComp);
+        const lateralMag = lateralComp.length();
+        const slip = lateralMag / speed;
 
-            // Convert grip to how much lateral we bleed this frame
-            const bleed = Math.min(1, grip * deltaTime);
-            lateralComp.multiplyScalar(1 - bleed);
-            this.velocity.copy(forwardComp.add(lateralComp));
+        let grip = THREE.MathUtils.lerp(this.maxGrip, this.baseGrip, slip);
+        if (slip > this.driftSlipThreshold) grip *= 0.7;
+        if (this.controls.handbrake) grip *= this.driftGripMultiplier;
+
+        const bleed = Math.min(1, grip * deltaTime);
+        lateralComp.multiplyScalar(1 - bleed);
+        const newVel = forwardComp.add(lateralComp);
+
+        // Update linear velocity (preserve any vertical component)
+        newVel.y = velVec.y;
+        this.body.setLinvel({ x: newVel.x, y: newVel.y, z: newVel.z }, true);
+
+        // Mirror for smoke & API
+        this.velocity.copy(newVel);
+        if (Math.random() < 0.02) {
+            console.debug('[Car] linvel', linvel.x.toFixed(2), linvel.y.toFixed(2), linvel.z.toFixed(2));
         }
-        
-        // Update position
-        this.position.add(this.velocity.clone().multiplyScalar(deltaTime));
-        
-        // Update car group position and rotation
+    }
+
+    update(deltaTime, worldOverride, eventQueue) {
+        if (this.exploded) {
+            // Update debris meshes to follow their rigid bodies
+            for (const piece of this.debris) {
+                const t = piece.body.translation();
+                piece.mesh.position.set(t.x, t.y, t.z);
+                const r = piece.body.rotation();
+                piece.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+            }
+            return; // Skip normal car physics while exploded
+        }
+        const world = worldOverride || this.world;
+        // Set per-frame timestep (Rapier uses fixed default if not set)
+        world.timestep = deltaTime;
+
+        // Phase 1: Apply input forces before stepping
+        this._applyInputForces(deltaTime);
+
+        // Step physics (optionally with event queue for collisions)
+        if (eventQueue) world.step(eventQueue); else world.step();
+
+        // Phase 2: Grip correction & drift shaping after physics step
+        this._applyGripAndDrift(deltaTime);
+
+        // Sync transform to Three.js
+        const t = this.body.translation();
+        const r = this.body.rotation();
+        this.position.set(t.x, t.y, t.z);
+        const quat = new THREE.Quaternion(r.x, r.y, r.z, r.w);
+        const euler = new THREE.Euler().setFromQuaternion(quat, 'YXZ');
+        this.rotation = euler.y;
+
         this.carGroup.position.copy(this.position);
-        this.carGroup.rotation.y = this.rotation;
+        this.carGroup.quaternion.copy(quat);
 
-        // Update and possibly spawn smoke particles
+        // For smoke forward vector (match original sign convention)
+        const forward = new THREE.Vector3(0,0,-1).applyQuaternion(quat).normalize();
+
+        // Update smoke using current velocity
         this._updateSmoke(deltaTime, forward);
     }
 
+    explode() {
+        if (this.exploded) return;
+        this.exploded = true;
+        this.carGroup.visible = false;
+        // Spawn debris pieces
+        const count = 12;
+        for (let i=0;i<count;i++) {
+            const size = 0.3 + Math.random()*0.2;
+            const geo = new THREE.BoxGeometry(size,size,size);
+            const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(Math.random(),0.6,0.5) });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.copy(this.position);
+            this.scene.add(mesh);
+            const rbDesc = this.RAPIER.RigidBodyDesc.dynamic().setTranslation(this.position.x, this.position.y + 0.5, this.position.z);
+            const body = this.world.createRigidBody(rbDesc);
+            const colDesc = this.RAPIER.ColliderDesc.cuboid(size/2,size/2,size/2).setRestitution(0.4).setFriction(0.6);
+            this.world.createCollider(colDesc, body);
+            // Impulse outward
+            body.applyImpulse({
+                x:(Math.random()-0.5)*40,
+                y:Math.random()*25 + 10,
+                z:(Math.random()-0.5)*40
+            }, true);
+            this.debris.push({ mesh, body });
+        }
+        // Burst of smoke
+        const forward = this.getForwardDirection();
+        for (let j=0;j<60;j++) this._spawnSmokeParticle(forward, 1.0);
+        setTimeout(()=>this.resetAfterExplosion(), 3500);
+    }
+
+    getColliderHandle() {
+        return this.collider ? this.collider.handle : null;
+    }
+
+    getSpeed() { return this.velocity.length(); }
+
+    shouldExplodeFromCollision(otherHandle, ignoreHandlesSet) {
+        if (!this.explodeOnAnyCollision) return false;
+        if (this.exploded) return false;
+        if (ignoreHandlesSet && otherHandle && ignoreHandlesSet.has(otherHandle)) return false;
+        if (this.getSpeed() < this.minExplodeSpeed) return false;
+        return true;
+    }
+
+    resetAfterExplosion() {
+        // Clean debris
+        for (const piece of this.debris) {
+            try { this.world.removeRigidBody(piece.body); } catch(e) {}
+            this.scene.remove(piece.mesh);
+        }
+        this.debris.length = 0;
+        // Reset car body
+        this.body.setTranslation({x:0,y:0.5,z:0}, true);
+        this.body.setLinvel({x:0,y:0,z:0}, true);
+        this.body.setAngvel({x:0,y:0,z:0}, true);
+        this.velocity.set(0,0,0);
+        this.carGroup.position.set(0,0.5,0);
+        this.carGroup.quaternion.identity();
+        this.carGroup.visible = true;
+        this.exploded = false;
+    }
+
     _computeSlip(forward) {
-        // Slip = magnitude of lateral component / total speed
         const speed = this.velocity.length();
         if (speed < 0.001) return 0;
         const forwardDir = forward.clone().normalize();
         const forwardSpeed = this.velocity.dot(forwardDir);
         const lateral = this.velocity.clone().sub(forwardDir.multiplyScalar(forwardSpeed));
-        return lateral.length() / speed; // 0..1 (roughly)
+        return lateral.length() / speed;
     }
 
     _shouldEmitSmoke(speed, slip) {
@@ -326,39 +489,32 @@ class Car {
 
     _spawnSmokeParticle(forward, slip) {
         const p = this.smokeParams;
-        if (this.smokeParticles.length > p.maxPoolSize) return; // cap
+        if (this.smokeParticles.length > p.maxPoolSize) return;
         const sprite = this._acquireSprite();
         if (!sprite.parent) this.scene.add(sprite);
         sprite.visible = true;
-        // Assign a random texture variant for shape variety
         if (this.smokeTextures && this.smokeTextures.length) {
             sprite.material.map = this.smokeTextures[Math.floor(Math.random()*this.smokeTextures.length)];
             sprite.material.needsUpdate = true;
         }
-        // Slight color variance (grey shades)
         const shade = 1 - Math.random() * p.colorVariance;
         sprite.material.color.setRGB(shade, shade, shade);
-        // Compute side vector (right) from forward
-        const right = new THREE.Vector3(Math.cos(this.rotation), 0, -Math.sin(this.rotation));
-        // Choose wheel side or center biased by slip (more slip = more chance of wide emission)
+        const right = new THREE.Vector3(1,0,0).applyQuaternion(this.carGroup.quaternion);
         const sideChoice = Math.random();
         let lateralBase = 0;
-        if (sideChoice < 0.45) lateralBase = -p.lateralWheelOffset; // left wheel
-        else if (sideChoice > 0.55) lateralBase = p.lateralWheelOffset; // right wheel
-        else lateralBase = (Math.random()-0.5) * p.lateralWheelOffset * 0.4; // near center
-        // Base rear anchor
+        if (sideChoice < 0.45) lateralBase = -p.lateralWheelOffset;
+        else if (sideChoice > 0.55) lateralBase = p.lateralWheelOffset;
+        else lateralBase = (Math.random()-0.5) * p.lateralWheelOffset * 0.4;
         const rearOffset = forward.clone().multiplyScalar(-p.rearWheelOffset);
         const basePos = this.position.clone()
             .add(rearOffset)
             .add(right.clone().multiplyScalar(lateralBase));
-        // Additional jitter (wider with slip)
         const lateralExtra = (Math.random()-0.5) * p.lateralJitter * (0.4 + slip*1.1);
         const longitudinalExtra = (Math.random()-0.5) * p.longitudinalJitter * (0.3 + slip*0.9);
         const jitterPos = basePos
             .add(right.clone().multiplyScalar(lateralExtra))
             .add(forward.clone().multiplyScalar(longitudinalExtra));
-        const worldPos = jitterPos;
-        sprite.position.copy(worldPos).add(new THREE.Vector3(0,0.18 + Math.random()*0.05,0));
+        sprite.position.copy(jitterPos).add(new THREE.Vector3(0,0.18 + Math.random()*0.05,0));
         const scale = p.startSize * (0.6 + Math.random()*p.sizeJitter);
         sprite.scale.set(scale, scale, scale);
         sprite.material.opacity = 0.95;
@@ -370,7 +526,7 @@ class Car {
             baseSize: scale,
             velocity: new THREE.Vector3((Math.random()-0.5)*0.22, p.upwardSpeed * (0.55 + Math.random()*0.75), (Math.random()-0.5)*0.22),
             spin: (Math.random()-0.5) * p.spinSpeed,
-            aspect: 0.85 + Math.random()*0.4, // anisotropic aspect ratio
+            aspect: 0.85 + Math.random()*0.4,
             wobbleFreq: THREE.MathUtils.lerp(p.shapeWobbleFreqMin, p.shapeWobbleFreqMax, Math.random()),
             wobblePhase: Math.random() * Math.PI * 2
         });
@@ -382,13 +538,11 @@ class Car {
         const now = performance.now() / 1000;
         const steeringActive = (now - this._lastSteerTime) <= this.smokeParams.stopGrace;
         if (steeringActive && this._shouldEmitSmoke(speed, slip)) {
-            // Determine target particles per second from slip
             const density = Math.min(this.smokeParams.slipToDensity * slip, this.smokeParams.slipToDensity);
             const interval = this.smokeParams.baseSpawnInterval;
             this._smokeTimeAccum += deltaTime;
             while (this._smokeTimeAccum >= interval) {
                 this._smokeTimeAccum -= interval;
-                // Spawn variable number based on density & randomness
                 const count = Math.min(
                     1 + Math.floor(density * interval + Math.random()*1.5),
                     this.smokeParams.maxParticlesPerCycle
@@ -398,7 +552,6 @@ class Car {
         } else {
             this._smokeTimeAccum = 0;
         }
-        // Update existing particles
         for (let i = this.smokeParticles.length -1; i >=0; i--) {
             const part = this.smokeParticles[i];
             part.age += deltaTime;
@@ -408,47 +561,42 @@ class Car {
                 this.smokeParticles.splice(i,1);
                 continue;
             }
-            // Movement & damping
             part.velocity.x *= this.smokeParams.lateralDampen;
             part.velocity.z *= this.smokeParams.lateralDampen;
-            // Apply upward acceleration curve (strong early, taper late)
             if (this.smokeParams.upwardAccel) {
                 const liftFactor = (1 - Math.min(part.age/part.life, 1));
                 part.velocity.y += this.smokeParams.upwardAccel * liftFactor * deltaTime;
             }
             part.sprite.position.addScaledVector(part.velocity, deltaTime);
-            // Expansion with slight irregular pulse
             const growth = Math.pow(t, 0.55 + Math.random()*0.05);
             const size = THREE.MathUtils.lerp(part.baseSize, this.smokeParams.endSize, growth);
-            // Anisotropic + wobble deformation
             const wobble = this.smokeParams.shapeWobbleAmp * Math.sin(part.wobblePhase + part.wobbleFreq * part.age);
             const wobbleY = this.smokeParams.shapeWobbleAmp * 0.6 * Math.cos(part.wobblePhase*0.7 + part.wobbleFreq * part.age * 0.85);
             const scaleX = size * part.aspect * (1 + wobble);
             const scaleY = size * (1 - wobbleY);
             part.sprite.scale.set(scaleX, scaleY, size);
-            // Spin
             part.sprite.material.rotation += part.spin * deltaTime;
-            // Darken slightly over life and fade
             const fade = Math.pow(1 - t, this.smokeParams.fadePower);
             part.sprite.material.opacity = fade;
             const shadeFactor = 0.85 + 0.15 * (1 - t);
-            part.sprite.material.color.offsetHSL(0, 0, 0); // no hue change; placeholder
             part.sprite.material.color.multiplyScalar(shadeFactor);
         }
     }
-    
+
     getPosition() {
         return this.position.clone();
     }
-    
+
     getForwardDirection() {
-        return new THREE.Vector3(-Math.sin(this.rotation), 0, -Math.cos(this.rotation));
+        const rot = this.body.rotation();
+        const quat = new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w);
+        return new THREE.Vector3(0,0,-1).applyQuaternion(quat).normalize();
     }
-    
+
     getSpeedKmh() {
-        return this.velocity.length() * 3.6; // Convert to km/h
+        return this.velocity.length() * 3.6;
     }
-    
+
     getCurrentGear() {
         const speed = this.velocity.length();
         if (speed < 10) return 1;

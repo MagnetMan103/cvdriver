@@ -1,11 +1,9 @@
+// Main demo script: MediaPipe Hands + Three.js steering wheel + Chart.js graphs
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import Chart from 'chart.js/auto';
 import { Hands } from '@mediapipe/hands';
 import { Camera } from '@mediapipe/camera_utils';
-
-// Main demo script: MediaPipe Hands + Three.js steering wheel + Chart.js graphs
-
 const video = document.getElementById('video');
 const overlay = document.getElementById('overlay');
 const overlayCtx = overlay.getContext('2d');
@@ -25,6 +23,14 @@ let autoMirrorChecked = false;
 const maxHistory = 200;
 const rData = [];
 const thetaData = [];
+
+// Export accessor so other modules (e.g., main.js) can read latest hand-derived values
+export function getLatestHandData() {
+  return {
+    r: rData.length ? rData[rData.length - 1] : null,
+    theta: thetaData.length ? thetaData[thetaData.length - 1] : null // degrees (converted to radians later if needed)
+  };
+}
 
 function setupThree() {
   scene = new THREE.Scene();
@@ -59,36 +65,24 @@ function setupThree() {
   // C:\Users\willi\Desktop\handsOff\ai-steering-wheel-racing-nrg\source\SteeringWheel_NRG.glb
   const modelPath = './ai-steering-wheel-racing-nrg/source/SteeringWheel_NRG.glb';
 
-  let LoaderCtor = null;
-  // Try common locations for GLTFLoader when using non-module script tags
-  if (THREE && THREE.GLTFLoader) LoaderCtor = THREE.GLTFLoader;
-  else if (typeof GLTFLoader !== 'undefined') LoaderCtor = GLTFLoader;
-
-  if (LoaderCtor) {
-    try {
-      const loader = new LoaderCtor();
-      loader.load(modelPath, gltf => {
-        wheel = gltf.scene;
-        // tweak model so it is visible in our camera/scene
-        wheel.scale.setScalar(0.02);
-        wheel.userData = wheel.userData || {};
-        wheel.userData.baseScale = 0.02;
-        // ensure wheel faces camera initially
-        wheel.quaternion.copy(camera.quaternion);
-        wheel.rotation.x = Math.PI / 2; // orient wheel face-on if needed (model-specific)
-        wheel.position.set(0, 0, 0);
-        scene.add(wheel);
-        drawStatus('GLB loaded');
-      }, undefined, e => {
-        console.warn('Failed to load GLB model, creating fallback wheel (torus).', e);
-        createSteeringWheelMesh();
-      });
-    } catch (err) {
-      console.warn('Error constructing GLTFLoader:', err);
+  try {
+    const loader = new GLTFLoader();
+    loader.load(modelPath, gltf => {
+      wheel = gltf.scene;
+      wheel.scale.setScalar(0.02);
+      wheel.userData = wheel.userData || {};
+      wheel.userData.baseScale = 0.02;
+      wheel.quaternion.copy(camera.quaternion);
+      wheel.rotation.x = Math.PI / 2;
+      wheel.position.set(0, 0, 0);
+      scene.add(wheel);
+      drawStatus('GLB loaded');
+    }, undefined, e => {
+      console.warn('Failed to load GLB model, creating fallback wheel (torus).', e);
       createSteeringWheelMesh();
-    }
-  } else {
-    console.warn('GLTFLoader not found on this page - using fallback wheel');
+    });
+  } catch (err) {
+    console.warn('Error constructing GLTFLoader:', err);
     createSteeringWheelMesh();
   }
 
@@ -301,48 +295,48 @@ function onResults(results) {
       const camQuat = camera.quaternion.clone();
       const camForward = new THREE.Vector3();
       camera.getWorldDirection(camForward);
-  // If the video is mirrored we need to invert rotation direction so the
-  // wheel turns the expected way relative to the mirrored markers.
-  const rotAngle = mirrorVideo ? theta : -theta;
-  const qRot = new THREE.Quaternion().setFromAxisAngle(camForward.normalize(), rotAngle);
+      // If the video is mirrored we need to invert rotation direction so the
+      // wheel turns the expected way relative to the mirrored markers.
+      const rotAngle = mirrorVideo ? theta : -theta;
+      const qRot = new THREE.Quaternion().setFromAxisAngle(camForward.normalize(), rotAngle);
       const targetQuat = camQuat.clone().multiply(qRot);
       wheel.quaternion.slerp(targetQuat, 0.4);
     } catch (e) {}
 
     // Scale the wheel so it fits within the circle through the palm centers.
     try {
-  // Desired diameter should be 3/4 of the on-screen line length => radius = (r * 3/4)/2 = r * 3/8
-  const desiredPixelRadius = Math.max(5, (r * 3 / 8)); // at least 5px
+      // Desired diameter should be 3/4 of the on-screen line length => radius = (r * 3/4)/2 = r * 3/8
+      const desiredPixelRadius = Math.max(5, (r * 3 / 8)); // at least 5px
 
       // compute world-space center and an edge point in the wheel's right direction
-        // We'll compute a scale that makes the wheel occupy 'desiredPixelRadius' on screen
-        // but ignore depth (z). To do this we estimate pixels-per-world-unit at a unit
-        // depth using the camera FOV and renderer height, then compute the scale that
-        // results in the desired pixel radius for the model's intrinsic radius.
-    // Use bounding sphere to get a stable object-space radius
-    const bbox = new THREE.Box3().setFromObject(wheel);
-    const sphere = bbox.getBoundingSphere(new THREE.Sphere());
-    const modelRadiusCurrent = sphere.radius || 0.5;
-    const currentScale = (wheel.scale && wheel.scale.x) ? wheel.scale.x : 1;
-    // model radius at scale = 1 (object-space radius)
-    const modelRadiusAtScale1 = modelRadiusCurrent / currentScale || 1e-6;
+      // We'll compute a scale that makes the wheel occupy 'desiredPixelRadius' on screen
+      // but ignore depth (z). To do this we estimate pixels-per-world-unit at a unit
+      // depth using the camera FOV and renderer height, then compute the scale that
+      // results in the desired pixel radius for the model's intrinsic radius.
+      // Use bounding sphere to get a stable object-space radius
+      const bbox = new THREE.Box3().setFromObject(wheel);
+      const sphere = bbox.getBoundingSphere(new THREE.Sphere());
+      const modelRadiusCurrent = sphere.radius || 0.5;
+      const currentScale = (wheel.scale && wheel.scale.x) ? wheel.scale.x : 1;
+      // model radius at scale = 1 (object-space radius)
+      const modelRadiusAtScale1 = modelRadiusCurrent / currentScale || 1e-6;
 
-        // pixels per world unit assuming a canonical depth of 1. This deliberately
-        // ignores the actual object depth so the resulting scale is driven only by
-        // the 2D pixel target (desiredPixelRadius).
-        const fovRad = (camera.fov || 50) * Math.PI / 180.0;
-        const pxPerWorldUnitAtZ1 = (renderer.domElement.clientHeight || window.innerHeight) / (2 * Math.tan(fovRad / 2));
+      // pixels per world unit assuming a canonical depth of 1. This deliberately
+      // ignores the actual object depth so the resulting scale is driven only by
+      // the 2D pixel target (desiredPixelRadius).
+      const fovRad = (camera.fov || 50) * Math.PI / 180.0;
+      const pxPerWorldUnitAtZ1 = (renderer.domElement.clientHeight || window.innerHeight) / (2 * Math.tan(fovRad / 2));
 
-        let targetScale = 1;
-        if (modelRadiusAtScale1 > 1e-8 && pxPerWorldUnitAtZ1 > 1e-8) {
-          // scale that maps the model's radius (at scale=1) to desiredPixelRadius
-          targetScale = (desiredPixelRadius) / (modelRadiusAtScale1 * pxPerWorldUnitAtZ1);
-        }
-    // clamp only the minimum to prevent degenerate tiny scales; allow large sizes
-    targetScale = Math.max(targetScale, 0.05);
-        // smooth towards target more responsively so changes are visible
-        const desiredScaleVec = new THREE.Vector3(targetScale, targetScale, targetScale);
-        wheel.scale.lerp(desiredScaleVec, 0.75);
+      let targetScale = 1;
+      if (modelRadiusAtScale1 > 1e-8 && pxPerWorldUnitAtZ1 > 1e-8) {
+        // scale that maps the model's radius (at scale=1) to desiredPixelRadius
+        targetScale = (desiredPixelRadius) / (modelRadiusAtScale1 * pxPerWorldUnitAtZ1);
+      }
+      // clamp only the minimum to prevent degenerate tiny scales; allow large sizes
+      targetScale = Math.max(targetScale, 0.05);
+      // smooth towards target more responsively so changes are visible
+      const desiredScaleVec = new THREE.Vector3(targetScale, targetScale, targetScale);
+      wheel.scale.lerp(desiredScaleVec, 0.75);
     } catch (e) { console.warn('scale adjust error', e); }
   }
 
@@ -422,10 +416,10 @@ async function init() {
       (function debugDraw() {
         if (video && video.readyState >= 2) {
           try {
-              // ensure overlay and renderer sizes match the video frame for correct projection
-              overlay.width = video.videoWidth;
-              overlay.height = video.videoHeight;
-              onResize();
+            // ensure overlay and renderer sizes match the video frame for correct projection
+            overlay.width = video.videoWidth;
+            overlay.height = video.videoHeight;
+            onResize();
           } catch (e) {}
         } else {
           drawStatus('Waiting for camera frames...');
@@ -436,7 +430,7 @@ async function init() {
     } else {
       throw new Error('MediaPipe Camera helper not available');
     }
-    } catch (e) {
+  } catch (e) {
     console.warn('MediaPipe Camera could not be started, falling back to getUserMedia:', e);
     await fallbackGetUserMedia();
   }
