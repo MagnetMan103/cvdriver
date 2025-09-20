@@ -15,6 +15,7 @@ class Car {
         this.brakeForce = 25;
         this.friction = .985;
         this.turnSpeed = 2.5;
+
     // Steering & grip model
     this.minSteerFactor = 0.25; // floor steering at low speed
     this.baseGrip = 2.0;        // low value keeps some lateral slide
