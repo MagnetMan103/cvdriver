@@ -1,23 +1,43 @@
 import * as THREE from 'three';
 import { Car } from './playerobject.js';
+import { getLatestHandData } from './camera.js';
 import { generateRoadSchematic } from "./mapgen.js";
 import RAPIER from '@dimforge/rapier3d-compat';
 
 let world; // Rapier world
 let car;   // Car instance
 let player; // Alias for car.carGroup for existing camera logic
+let obstacleBody; // test obstacle
+let obstacleMesh;
+let eventQueue; // Rapier EventQueue for collisions
+let groundHandles = new Set();
 
 async function init() {
     await RAPIER.init();
     const gravity = { x: 0, y: 0, z: 0 }; // top-down view, no gravity
     world = new RAPIER.World(gravity);
+    eventQueue = new RAPIER.EventQueue(true);
 
     // Static ground collider (broad plane substitute)
     const groundColliderDesc = RAPIER.ColliderDesc.cuboid(500, 0.1, 500).setTranslation(0, 0, 0);
-    world.createCollider(groundColliderDesc);
+    const groundCollider = world.createCollider(groundColliderDesc);
+    groundHandles.add(groundCollider.handle);
+
+    // Simple obstacle
+    const obsSize = {x:1,y:1,z:1};
+    const obsRBDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0,0.5,-25);
+    obstacleBody = world.createRigidBody(obsRBDesc);
+    const obsCol = RAPIER.ColliderDesc.cuboid(obsSize.x,obsSize.y,obsSize.z).setRestitution(0.2).setFriction(0.8);
+    world.createCollider(obsCol, obstacleBody);
+    const boxGeo = new THREE.BoxGeometry(obsSize.x*2, obsSize.y*2, obsSize.z*2);
+    const boxMat = new THREE.MeshStandardMaterial({color:0xffff00});
+    obstacleMesh = new THREE.Mesh(boxGeo, boxMat);
+    obstacleMesh.position.set(0,0.5,-25);
+    scene.add(obstacleMesh);
 
     // Create car after world exists
     car = new Car(scene, world, RAPIER);
+    const carHandle = car.getColliderHandle();
     player = car.carGroup;
 
     // Start animation loop once physics & car are ready
@@ -233,6 +253,17 @@ toggleBtn.addEventListener('click', () => {
     usePlayerCamera = !usePlayerCamera;
 });
 
+// Hand control mapping & interpolation config
+const HAND_INPUT = {
+    maxThetaDeg: 90,     // +/- degrees for full steering lock
+    maxR: 400,           // pixel separation giving full throttle
+    smoothing: 0.18,     // 0..1 lerp factor per frame (higher = snappier)
+    minRForThrottle: 0,  // linear from 0 for now (can raise to add deadzone)
+    invertSteering: true // invert if wheel direction feels reversed
+};
+let filteredTheta = null; // degrees
+let filteredR = null;     // pixels
+
 // Simple control state debug panel
 const ctrlDebug = document.createElement('div');
 ctrlDebug.style.position = 'absolute';
@@ -356,7 +387,46 @@ function animate() {
     }
 
     if (car) {
-        car.update(delta, world);
+        // Pull latest hand data (theta degrees, r pixels) & apply interpolation
+        const hand = getLatestHandData();
+        if (hand && hand.theta != null && hand.r != null) {
+            if (filteredTheta == null) {
+                filteredTheta = hand.theta;
+                filteredR = hand.r;
+            } else {
+                filteredTheta += (hand.theta - filteredTheta) * HAND_INPUT.smoothing;
+                filteredR += (hand.r - filteredR) * HAND_INPUT.smoothing;
+            }
+
+            const steeringRaw = filteredTheta / HAND_INPUT.maxThetaDeg;
+            const steering = Math.max(-1, Math.min(1, (HAND_INPUT.invertSteering ? -steeringRaw : steeringRaw)));
+            let throttleNorm = (filteredR - HAND_INPUT.minRForThrottle) / (HAND_INPUT.maxR - HAND_INPUT.minRForThrottle);
+            const throttle = Math.max(0, Math.min(1, throttleNorm));
+            car.setAnalogControls(steering, throttle);
+        }
+        car.update(delta, world, eventQueue);
+        // Process collision events to detect any impact
+        if (eventQueue) {
+            eventQueue.drainCollisionEvents((h1, h2, started) => {
+                if (!started) return; // only on collision start
+                const carHandle = car.getColliderHandle();
+                if (carHandle == null) return;
+                let other = null;
+                if (h1 === carHandle) other = h2; else if (h2 === carHandle) other = h1;
+                if (other == null) return;
+                if (car.shouldExplodeFromCollision(other, groundHandles)) {
+                    car.explode();
+                }
+            });
+        }
+        // simple collision distance test with obstacle center (broad-phase only)
+        // (Retained for extra fallback; can remove later)
+        if (!car.exploded && obstacleMesh) {
+            const dx = car.position.x - obstacleMesh.position.x;
+            const dy = car.position.y - obstacleMesh.position.y;
+            const dz = car.position.z - obstacleMesh.position.z;
+            if (dx*dx + dy*dy + dz*dz < 4 && car.getSpeed() > 1) car.explode();
+        }
         // Update control debug
         const c = car.controls;
         ctrlDebug.textContent = `W:${c.forward?'1':'0'} S:${c.backward?'1':'0'} A:${c.left?'1':'0'} D:${c.right?'1':'0'} HB:${c.handbrake?'1':'0'}\nSpeed:${car.velocity.length().toFixed(2)}`;

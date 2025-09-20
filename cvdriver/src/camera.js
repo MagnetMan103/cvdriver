@@ -21,6 +21,14 @@ const maxHistory = 200;
 const rData = [];
 const thetaData = [];
 
+// Export accessor so other modules (e.g., main.js) can read latest hand-derived values
+export function getLatestHandData() {
+  return {
+    r: rData.length ? rData[rData.length - 1] : null,
+    theta: thetaData.length ? thetaData[thetaData.length - 1] : null // degrees (converted to radians later if needed)
+  };
+}
+
 function setupThree() {
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);

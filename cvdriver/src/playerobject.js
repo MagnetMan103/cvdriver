@@ -34,10 +34,19 @@ class Car {
             right: false,
             handbrake: false
         };
+            // External analog control (overrides keyboard when provided)
+            this.analog = {
+                steering: null, // -1..1
+                throttle: null  // 0..1 (positive only for now)
+            };
 
         this.createCarMesh();
         this._createPhysicsBody();
         this.setupControls();
+    this.exploded = false;
+    this.debris = [];
+    this.explodeOnAnyCollision = true;
+    this.minExplodeSpeed = 3; // m/s threshold before collision can trigger explosion
 
         // Smoke system (unchanged)
         this.smokeParams = {
@@ -255,23 +264,33 @@ class Car {
         const forward = new THREE.Vector3(0,0,-1).applyQuaternion(quat).normalize();
         const right = new THREE.Vector3(1,0,0).applyQuaternion(quat).normalize();
 
-        // Engine / brake
-        if (this.controls.forward) {
-            const impulse = forward.clone().multiplyScalar(this.accelerationForce * deltaTime);
-            this.body.applyImpulse(impulse, true);
-        } else if (this.controls.backward) {
-            const impulse = forward.clone().multiplyScalar(-this.brakeForce * deltaTime);
+        // Engine / brake with optional analog
+        let throttleInput = 0;
+        if (this.analog.throttle != null) {
+            throttleInput = Math.max(0, Math.min(1, this.analog.throttle));
+        } else {
+            if (this.controls.forward) throttleInput += 1;
+            if (this.controls.backward) throttleInput -= 1; // supports simple reverse
+        }
+        if (throttleInput !== 0) {
+            const impulse = forward.clone().multiplyScalar(this.accelerationForce * throttleInput * deltaTime);
             this.body.applyImpulse(impulse, true);
         }
 
-        // Steering via angular velocity (yaw)
+        // Steering via angular velocity (yaw) with optional analog
         let steerInput = 0;
-        if (this.controls.left) steerInput += 1;
-        if (this.controls.right) steerInput -= 1;
+        if (this.analog.steering != null) {
+            steerInput = Math.max(-1, Math.min(1, this.analog.steering));
+        } else {
+            if (this.controls.left) steerInput += 1;
+            if (this.controls.right) steerInput -= 1;
+        }
 
         if (steerInput !== 0) {
             this._lastSteerTime = performance.now() / 1000;
         }
+
+        
 
         const linvel = this.body.linvel();
         const velVec = new THREE.Vector3(linvel.x, linvel.y, linvel.z);
@@ -287,6 +306,12 @@ class Car {
             const newYaw = THREE.MathUtils.lerp(angvel.y, targetYawVel, blend);
             this.body.setAngvel({ x: angvel.x * 0.5, y: newYaw, z: angvel.z * 0.5 }, true);
         }
+    }
+
+    // Allow external modules to set analog steering (-1..1) and throttle (0..1)
+    setAnalogControls(steering, throttle) {
+        this.analog.steering = steering;
+        this.analog.throttle = throttle;
     }
 
     _applyGripAndDrift(deltaTime) {
@@ -328,7 +353,17 @@ class Car {
         }
     }
 
-    update(deltaTime, worldOverride) {
+    update(deltaTime, worldOverride, eventQueue) {
+        if (this.exploded) {
+            // Update debris meshes to follow their rigid bodies
+            for (const piece of this.debris) {
+                const t = piece.body.translation();
+                piece.mesh.position.set(t.x, t.y, t.z);
+                const r = piece.body.rotation();
+                piece.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+            }
+            return; // Skip normal car physics while exploded
+        }
         const world = worldOverride || this.world;
         // Set per-frame timestep (Rapier uses fixed default if not set)
         world.timestep = deltaTime;
@@ -336,8 +371,8 @@ class Car {
         // Phase 1: Apply input forces before stepping
         this._applyInputForces(deltaTime);
 
-        // Step physics
-        world.step();
+        // Step physics (optionally with event queue for collisions)
+        if (eventQueue) world.step(eventQueue); else world.step();
 
         // Phase 2: Grip correction & drift shaping after physics step
         this._applyGripAndDrift(deltaTime);
@@ -358,6 +393,69 @@ class Car {
 
         // Update smoke using current velocity
         this._updateSmoke(deltaTime, forward);
+    }
+
+    explode() {
+        if (this.exploded) return;
+        this.exploded = true;
+        this.carGroup.visible = false;
+        // Spawn debris pieces
+        const count = 12;
+        for (let i=0;i<count;i++) {
+            const size = 0.3 + Math.random()*0.2;
+            const geo = new THREE.BoxGeometry(size,size,size);
+            const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(Math.random(),0.6,0.5) });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.copy(this.position);
+            this.scene.add(mesh);
+            const rbDesc = this.RAPIER.RigidBodyDesc.dynamic().setTranslation(this.position.x, this.position.y + 0.5, this.position.z);
+            const body = this.world.createRigidBody(rbDesc);
+            const colDesc = this.RAPIER.ColliderDesc.cuboid(size/2,size/2,size/2).setRestitution(0.4).setFriction(0.6);
+            this.world.createCollider(colDesc, body);
+            // Impulse outward
+            body.applyImpulse({
+                x:(Math.random()-0.5)*40,
+                y:Math.random()*25 + 10,
+                z:(Math.random()-0.5)*40
+            }, true);
+            this.debris.push({ mesh, body });
+        }
+        // Burst of smoke
+        const forward = this.getForwardDirection();
+        for (let j=0;j<60;j++) this._spawnSmokeParticle(forward, 1.0);
+        setTimeout(()=>this.resetAfterExplosion(), 3500);
+    }
+
+    getColliderHandle() {
+        return this.collider ? this.collider.handle : null;
+    }
+
+    getSpeed() { return this.velocity.length(); }
+
+    shouldExplodeFromCollision(otherHandle, ignoreHandlesSet) {
+        if (!this.explodeOnAnyCollision) return false;
+        if (this.exploded) return false;
+        if (ignoreHandlesSet && otherHandle && ignoreHandlesSet.has(otherHandle)) return false;
+        if (this.getSpeed() < this.minExplodeSpeed) return false;
+        return true;
+    }
+
+    resetAfterExplosion() {
+        // Clean debris
+        for (const piece of this.debris) {
+            try { this.world.removeRigidBody(piece.body); } catch(e) {}
+            this.scene.remove(piece.mesh);
+        }
+        this.debris.length = 0;
+        // Reset car body
+        this.body.setTranslation({x:0,y:0.5,z:0}, true);
+        this.body.setLinvel({x:0,y:0,z:0}, true);
+        this.body.setAngvel({x:0,y:0,z:0}, true);
+        this.velocity.set(0,0,0);
+        this.carGroup.position.set(0,0.5,0);
+        this.carGroup.quaternion.identity();
+        this.carGroup.visible = true;
+        this.exploded = false;
     }
 
     _computeSlip(forward) {
