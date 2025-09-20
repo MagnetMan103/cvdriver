@@ -3,12 +3,32 @@
 <head>
   <meta charset="utf-8">
   <title>My first three.js app</title>
+  <link rel="stylesheet" type="text/css" href="./src/style.css">
   <style>
     body { margin: 0; }
   </style>
 </head>
 <body>
+<div id="app">
+  <div id="debug" aria-live="polite"></div>
+  <video id="video" autoplay playsinline></video>
+  <canvas id="overlay"></canvas>
+  <div id="ui">
+    <div id="three-container"></div>
+    <div id="charts">
+      <canvas id="chart-r"></canvas>
+      <canvas id="chart-theta"></canvas>
+    </div>
+  </div>
+</div>
 <canvas id="three-canvas"></canvas>
 <script src="./src/main.js" type="module"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="./src/camera.js"></script>
+
 </body>
 </html>
