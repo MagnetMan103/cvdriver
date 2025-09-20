@@ -64,7 +64,21 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 
 // Create scene
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0096FF);
+const loader = new THREE.TextureLoader();
+
+// Load the image and set it as the scene background
+loader.load(
+    '/mountains.png', // Replace with the actual path to your image
+    function(texture) {
+        // When the texture loads successfully, assign it to scene.background
+        scene.background = texture;
+    },
+    undefined, // Optional: onProgress callback
+    function(err) {
+        // Optional: onError callback for handling errors during loading
+        console.error('An error occurred while loading the background image:', err);
+    }
+);
 
 // Track generated road segments and grids to avoid duplicates
 const generatedSegments = new Set();
@@ -166,36 +180,86 @@ function addGridsForRoadPoints(points) {
     });
 }
 
-// Modified function to add curved road segments
+// Helper to create a fence segment between two points
+function createFenceSegment(start, end, height = 2, thickness = 0.2, color = 0xffffff) {
+    const length = start.distanceTo(end);
+    const geometry = new THREE.BoxGeometry(thickness, height, length);
+    const material = new THREE.MeshLambertMaterial({ color });
+    const fence = new THREE.Mesh(geometry, material);
+
+    // Position fence at midpoint
+    const mid = start.clone().add(end).multiplyScalar(0.5);
+    fence.position.set(mid.x, mid.y + height / 2, mid.z);
+
+    // Align fence with segment direction
+    const direction = end.clone().sub(start);
+    const angle = Math.atan2(direction.x, direction.z);
+    fence.rotation.y = angle;
+
+    return fence;
+}
+function addFenceWithPhysics(start, end, height = 2, thickness = 0.2, color = 0xffffff) {
+    const length = start.distanceTo(end);
+    const fence = createFenceSegment(start, end, height, thickness, color);
+    scene.add(fence);
+
+    // Physics: create static rigid body and collider
+    const mid = start.clone().add(end).multiplyScalar(0.5);
+    const rigidBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(mid.x, mid.y + height / 2, mid.z);
+    const rigidBody = world.createRigidBody(rigidBodyDesc);
+
+    const colliderDesc = RAPIER.ColliderDesc.cuboid(thickness / 2, height / 2, length / 2);
+    colliderDesc.setRotation({ x: 0, y: fence.rotation.y, z: 0, w: 1 }); // Y rotation only
+    world.createCollider(colliderDesc, rigidBody);
+
+    return fence;
+}
+
+// Modified addCurvyRoadSegment to add fences
 function addCurvyRoadSegment(points) {
     if (!points || points.length < 2) return;
 
-    // Create unique key for this segment group
     const segmentKey = `${Math.round(points[0].x * 10)},${Math.round(points[0].z * 10)}-${Math.round(points[points.length-1].x * 10)},${Math.round(points[points.length-1].z * 10)}`;
-
-    // Skip if already generated
-    if (generatedSegments.has(segmentKey)) {
-        return;
-    }
+    if (generatedSegments.has(segmentKey)) return;
     generatedSegments.add(segmentKey);
 
     // Create the curved road mesh
     const roadMesh = createRoadStrip(points);
-    if (roadMesh) {
-        scene.add(roadMesh);
-    }
+    if (roadMesh) scene.add(roadMesh);
 
     // Add grid helpers for this road segment
     addGridsForRoadPoints(points);
 
     // Add physics colliders along the road path
     points.forEach((point, index) => {
-        if (index % 3 === 0) { // Add colliders every 3rd point to avoid too many
+        if (index % 3 === 0) {
             const roadColliderDesc = RAPIER.ColliderDesc.cuboid(6, 0.1, 6);
             roadColliderDesc.setTranslation(point.x, point.y || 0, point.z);
             world.createCollider(roadColliderDesc, groundRigidBody);
         }
     });
+
+    // Add fences 10 units away from road edges
+    const roadWidth = 12;
+    const fenceOffset = 10;
+    for (let i = 0; i < points.length - 1; i++) {
+        const p1 = new THREE.Vector3(points[i].x, (points[i].y || 0.01) + 0.02, points[i].z);
+        const p2 = new THREE.Vector3(points[i + 1].x, (points[i + 1].y || 0.01) + 0.02, points[i + 1].z);
+
+        // Calculate perpendicular direction
+        const forward = p2.clone().sub(p1).normalize();
+        const perpendicular = new THREE.Vector3(-forward.z, 0, forward.x);
+
+        // Left fence (10 units further out)
+        const leftStart = p1.clone().add(perpendicular.clone().multiplyScalar((roadWidth / 2) + fenceOffset));
+        const leftEnd = p2.clone().add(perpendicular.clone().multiplyScalar((roadWidth / 2) + fenceOffset));
+        addFenceWithPhysics(leftStart, leftEnd);
+
+        // Right fence (10 units further out)
+        const rightStart = p1.clone().add(perpendicular.clone().multiplyScalar(-(roadWidth / 2) - fenceOffset));
+        const rightEnd = p2.clone().add(perpendicular.clone().multiplyScalar(-(roadWidth / 2) - fenceOffset));
+        addFenceWithPhysics(rightStart, rightEnd);
+    }
 }
 
 function setupNextFrame(x, y = 0, z, angle = 0) {
@@ -340,6 +404,7 @@ let lastTime = performance.now();
 function animate() {
     const now = performance.now();
     const delta = (now - lastTime) / 1000;
+    console.log(rData)
     lastTime = now;
 
     if (lastRoad.z === 0) {
