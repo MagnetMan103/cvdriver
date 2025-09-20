@@ -45,12 +45,37 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xeeeeee);
 
 // Add large grid helper (black lines)
-const gridSize = 1000;
-const gridDivisions = 1000;
+const gridSize = 100;
+const gridDivisions = 100;
 const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0x000000, 0x000000);
 gridHelper.position.y = 0;
 scene.add(gridHelper);
 
+// Create a procedurally generated road
+function initialRoad() {
+    const roadWidth = 4;
+    const roadLength = 200;
+    const roadGeometry = new THREE.PlaneGeometry(roadWidth, roadLength);
+    const roadMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
+    const road = new THREE.Mesh(roadGeometry, roadMaterial);
+    road.rotation.x = -Math.PI / 2;
+    road.position.y = 0.01; // Slightly above the grid
+    scene.add(road);
+}
+// used to generate new roads
+let lastRoadZ = 0;
+function addRoadSegment(zPosition) {
+    const roadWidth = 4;
+    const roadLength = 20;
+    const roadGeometry = new THREE.PlaneGeometry(roadWidth, roadLength);
+    const roadMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
+    const road = new THREE.Mesh(roadGeometry, roadMaterial);
+    road.rotation.x = -Math.PI / 2;
+    road.position.set(0, 0.01, zPosition);
+    scene.add(road);
+}
+
+initialRoad();
 // Player
 const playerSize = 1;
 const playerGeometry = new THREE.BoxGeometry(playerSize, 0.2, playerSize);
@@ -83,7 +108,6 @@ toggleBtn.addEventListener('click', () => {
 
 // Movement
 const moveSpeed = 2;
-const bounds = gridSize / 2 - playerSize / 2; // Large bounds for movement
 const keys = {};
 
 window.addEventListener('keydown', (e) => {
@@ -109,12 +133,6 @@ function updatePlayerPosition() {
     if (keys['ArrowLeft']) newVelX = -moveSpeed * 10;
     else if (keys['ArrowRight']) newVelX = moveSpeed * 10;
     else newVelX = 0;
-
-    // Check bounds
-    if (currentPos.x <= -bounds && newVelX < 0) newVelX = 0;
-    if (currentPos.x >= bounds && newVelX > 0) newVelX = 0;
-    if (currentPos.z <= -bounds && newVelZ < 0) newVelZ = 0;
-    if (currentPos.z >= bounds && newVelZ > 0) newVelZ = 0;
 
     playerRigidBody.setLinvel({ x: newVelX, y: currentVel.y, z: newVelZ }, true);
 }
@@ -149,6 +167,11 @@ function animate() {
         renderer.render(scene, playerCamera);
     } else {
         renderer.render(scene, overviewCamera);
+    }
+    // Add new road segments as the player moves forward
+    if (player.position.z < lastRoadZ + 100) {
+        lastRoadZ -= 20;
+        addRoadSegment(lastRoadZ);
     }
     requestAnimationFrame(animate);
 }
