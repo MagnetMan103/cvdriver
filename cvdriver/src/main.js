@@ -35,8 +35,8 @@ document.body.appendChild(toggleBtn);
 
 const coordinatesCard = document.createElement('div');
 coordinatesCard.style.position = 'absolute';
-coordinatesCard.style.bottom = '10px';
-coordinatesCard.style.left = '10px';
+coordinatesCard.style.top = '10px';
+coordinatesCard.style.right = '10px';
 coordinatesCard.style.padding = '10px';
 coordinatesCard.style.backgroundColor = 'rgba(255, 255, 255, 0.8)';
 coordinatesCard.style.fontFamily = 'monospace';
@@ -64,35 +64,114 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 
 // Create scene
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xeeeeee);
+scene.background = new THREE.Color(0x0096FF);
 
-// Add large grid helper (black lines)
-const gridSize = 1000;
-const gridDivisions = 1000;
-const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0x000000, 0x000000);
-gridHelper.position.y = 0;
-scene.add(gridHelper);
-
-// Track generated road segments to avoid duplicates
+// Track generated road segments and grids to avoid duplicates
 const generatedSegments = new Set();
+const generatedGrids = new Set(); // Track generated grids separately
 let lastPlayerZ = 0;
+const roadSegments = []; // Store all road points for continuous generation
 
-// used to generate new roads
-function addRoadSegment(x, y = 0, z, theta = 0) {
-    const roadWidth = 12;
-    const roadLength = 20;
-    const roadGeometry = new THREE.PlaneGeometry(roadWidth, roadLength);
-    const roadMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
-    const road = new THREE.Mesh(roadGeometry, roadMaterial);
-    road.rotation.x = -Math.PI / 2;
-    road.rotation.y = theta; // Apply rotation around Y axis for curves
-    road.position.set(x, y + 0.01, z);
-    scene.add(road);
+// Alternative method using ribbon/strip geometry for better performance
+function createRoadStrip(points, roadWidth = 12) {
+    if (points.length < 2) return null;
+
+    const vertices = [];
+    const indices = [];
+    const normals = [];
+    const uvs = [];
+
+    // Create vertices for both sides of the road
+    for (let i = 0; i < points.length; i++) {
+        const point = points[i];
+        const pos = new THREE.Vector3(point.x, (point.y || 0.01) + 0.02, point.z);
+
+        // Calculate perpendicular direction for road width
+        let perpendicular;
+        if (i === 0) {
+            const next = new THREE.Vector3(points[i + 1].x, points[i + 1].y || 0, points[i + 1].z);
+            const forward = next.clone().sub(pos).normalize();
+            perpendicular = new THREE.Vector3(-forward.z, 0, forward.x);
+        } else if (i === points.length - 1) {
+            const prev = new THREE.Vector3(points[i - 1].x, points[i - 1].y || 0, points[i - 1].z);
+            const forward = pos.clone().sub(prev).normalize();
+            perpendicular = new THREE.Vector3(-forward.z, 0, forward.x);
+        } else {
+            const prev = new THREE.Vector3(points[i - 1].x, points[i - 1].y || 0, points[i - 1].z);
+            const next = new THREE.Vector3(points[i + 1].x, points[i + 1].y || 0, points[i + 1].z);
+            const forward1 = pos.clone().sub(prev).normalize();
+            const forward2 = next.clone().sub(pos).normalize();
+            const avgForward = forward1.add(forward2).normalize();
+            perpendicular = new THREE.Vector3(-avgForward.z, 0, avgForward.x);
+        }
+
+        const leftVertex = pos.clone().add(perpendicular.clone().multiplyScalar(roadWidth / 2));
+        const rightVertex = pos.clone().add(perpendicular.clone().multiplyScalar(-roadWidth / 2));
+
+        vertices.push(leftVertex.x, leftVertex.y, leftVertex.z);
+        vertices.push(rightVertex.x, rightVertex.y, rightVertex.z);
+
+        normals.push(0, 1, 0);
+        normals.push(0, 1, 0);
+
+        const u = i / (points.length - 1);
+        uvs.push(0, u);
+        uvs.push(1, u);
+
+        if (i < points.length - 1) {
+            const base = i * 2;
+            indices.push(base, base + 1, base + 2);
+            indices.push(base + 1, base + 3, base + 2);
+        }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+
+    const material = new THREE.MeshLambertMaterial({
+        color: 0x36454F,
+        side: THREE.DoubleSide
+    });
+
+    return new THREE.Mesh(geometry, material);
 }
 
-function setupNextFrame(x, y = 0, z, theta = 0) {
-    // Create unique key for this segment
-    const segmentKey = `${Math.round(x * 10)},${Math.round(z * 10)}`;
+// Function to add grid helpers along the road path
+function addGridsForRoadPoints(points) {
+    points.forEach((point, index) => {
+        if (index % 4 === 0) {
+            const gridKey = `grid_${Math.round(point.x / 50) * 50}_${Math.round(point.z / 50) * 50}`;
+            if (generatedGrids.has(gridKey)) {
+                return;
+            }
+            generatedGrids.add(gridKey);
+
+            // Create a plane at this position
+            const planeGeometry = new THREE.PlaneGeometry(300, 100);
+            const planeMaterial = new THREE.MeshBasicMaterial({ color: 0x98FB98, side: THREE.DoubleSide });
+            const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+
+            // Rotate to lie flat (XZ plane)
+            plane.rotation.x = -Math.PI / 2;
+            plane.position.set(
+                Math.round(point.x / 50) * 50,
+                0,
+                Math.round(point.z / 50) * 50
+            );
+            scene.add(plane);
+        }
+    });
+}
+
+// Modified function to add curved road segments
+function addCurvyRoadSegment(points) {
+    if (!points || points.length < 2) return;
+
+    // Create unique key for this segment group
+    const segmentKey = `${Math.round(points[0].x * 10)},${Math.round(points[0].z * 10)}-${Math.round(points[points.length-1].x * 10)},${Math.round(points[points.length-1].z * 10)}`;
 
     // Skip if already generated
     if (generatedSegments.has(segmentKey)) {
@@ -100,18 +179,28 @@ function setupNextFrame(x, y = 0, z, theta = 0) {
     }
     generatedSegments.add(segmentKey);
 
-    // Add the road segment
-    addRoadSegment(x, y, z, theta);
+    // Create the curved road mesh
+    const roadMesh = createRoadStrip(points);
+    if (roadMesh) {
+        scene.add(roadMesh);
+    }
 
-    // Add grid helper for this section
-    const gridHelper = new THREE.GridHelper(100, 100, 0x000000, 0x000000);
-    gridHelper.position.set(x, 0, z);
-    scene.add(gridHelper);
+    // Add grid helpers for this road segment
+    addGridsForRoadPoints(points);
 
-    // Add physics collider for this road segment
-    const roadColliderDesc = RAPIER.ColliderDesc.cuboid(2, 0.1, 10);
-    roadColliderDesc.setTranslation(x, y, z);
-    world.createCollider(roadColliderDesc, groundRigidBody);
+    // Add physics colliders along the road path
+    points.forEach((point, index) => {
+        if (index % 3 === 0) { // Add colliders every 3rd point to avoid too many
+            const roadColliderDesc = RAPIER.ColliderDesc.cuboid(6, 0.1, 6);
+            roadColliderDesc.setTranslation(point.x, point.y || 0, point.z);
+            world.createCollider(roadColliderDesc, groundRigidBody);
+        }
+    });
+}
+
+function setupNextFrame(x, y = 0, z, angle = 0) {
+    // Add this point to our road segments array
+    roadSegments.push({ x, y, z, angle });
 }
 
 // Car (replaces previous red cube player)
@@ -161,18 +250,84 @@ function updatePlayerCamera() {
 }
 
 let lastRoad = { x: 0, y: 0, z: 0, theta: 0 };
+let lastGeneratedSegmentCount = 0;
+let lastRoadEndPoint = null; // Save the last point from previous road segment
+
+// Function to interpolate between road points for smoother curves
+function interpolateRoadPoints(points, subdivisions = 2) {
+    if (points.length < 2) return points;
+
+    const interpolated = [points[0]]; // Start with first point
+
+    for (let i = 0; i < points.length - 1; i++) {
+        const current = points[i];
+        const next = points[i + 1];
+
+        // Add subdivisions between current and next point
+        for (let j = 1; j <= subdivisions; j++) {
+            const t = j / (subdivisions + 1);
+            const interpolatedPoint = {
+                x: current.x + (next.x - current.x) * t,
+                y: current.y + (next.y - current.y) * t,
+                z: current.z + (next.z - current.z) * t,
+                angle: current.angle + (next.angle - current.angle) * t
+            };
+            interpolated.push(interpolatedPoint);
+        }
+
+        // Add the next point (except for the last iteration)
+        if (i < points.length - 2) {
+            interpolated.push(next);
+        }
+    }
+
+    // Always add the final point
+    interpolated.push(points[points.length - 1]);
+    return interpolated;
+}
+
 function generateNewRoadSegments(x, y, z) {
     try {
         const roadPoints = generateRoadSchematic(x, y, z);
         if (roadPoints && Array.isArray(roadPoints)) {
-            roadPoints.forEach(point => {
+            const smoothedPoints = interpolateRoadPoints(roadPoints, 2);
+
+            smoothedPoints.forEach(point => {
                 if (point && typeof point.x === 'number' && typeof point.z === 'number') {
-                    setupNextFrame(point.x, point.y || 0, point.z, point.theta || 0);
+                    setupNextFrame(point.x, point.y || 0, point.z, point.angle || 0);
                 }
             });
         }
         lastRoad = roadPoints[roadPoints.length - 1];
-    } catch (error) {
+
+        const segmentCount = roadSegments.length;
+        if (segmentCount > lastGeneratedSegmentCount + 8) {
+            let segmentsToProcess = roadSegments.slice(lastGeneratedSegmentCount);
+
+            // Always prepend lastRoadEndPoint for continuity
+            if (lastRoadEndPoint) {
+                segmentsToProcess = [lastRoadEndPoint, ...segmentsToProcess];
+            }
+
+            // Remove duplicate points at the join (if any)
+            if (
+                segmentsToProcess.length > 1 &&
+                segmentsToProcess[0].x === segmentsToProcess[1].x &&
+                segmentsToProcess[0].z === segmentsToProcess[1].z
+            ) {
+                segmentsToProcess.shift();
+            }
+
+            if (segmentsToProcess.length > 1) {
+                addCurvyRoadSegment(segmentsToProcess);
+
+                lastRoadEndPoint = segmentsToProcess[segmentsToProcess.length - 1];
+                lastRoadEndPoint.z += 3
+                lastGeneratedSegmentCount = segmentCount;
+            }
+        }
+    }
+    catch (error) {
         console.warn('Road generation failed:', error);
         // Fallback: generate a simple straight road segment
         const fallbackZ = lastPlayerZ - 50;
@@ -202,8 +357,9 @@ function animate() {
     // Update coordinates display
     coordinatesCard.textContent = `Coordinates: (${player.position.x.toFixed(2)}, ${player.position.y.toFixed(2)}, ${player.position.z.toFixed(2)})`;
     carStatsCard.textContent = `Speed: ${car.velocity.length().toFixed(2)} | Steering: ${car.rotation.toFixed(2)}`;
+
     // Generate new road segments when player moves forward significantly
-    if (player.position.z < lastRoad.z + 100) {
+    if (player.position.z < lastRoad.z + 400) {
         lastPlayerZ = player.position.z;
         generateNewRoadSegments(lastRoad.x, lastRoad.y, lastRoad.z);
     }
@@ -212,7 +368,7 @@ function animate() {
     if (!usePlayerCamera) {
         overviewCamera.position.set(
             player.position.x,
-            player.position.y + 20,
+            player.position.y + 40,
             player.position.z + 20
         );
         overviewCamera.lookAt(player.position.x, 0, player.position.z - 10);

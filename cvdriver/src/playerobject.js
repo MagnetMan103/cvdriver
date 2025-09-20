@@ -240,7 +240,9 @@ class Car {
         
         // Apply acceleration
         this.velocity.add(this.acceleration.clone().multiplyScalar(deltaTime));
-        
+        if (this.velocity.length() > 60) {
+            this.velocity.setLength(60);
+        }
         // Apply friction
         this.velocity.multiplyScalar(this.friction);
         
