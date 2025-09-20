@@ -84,7 +84,7 @@ function createRoadStrip(points, roadWidth = 12) {
     // Create vertices for both sides of the road
     for (let i = 0; i < points.length; i++) {
         const point = points[i];
-        const pos = new THREE.Vector3(point.x, point.y || 0.01, point.z);
+        const pos = new THREE.Vector3(point.x, (point.y || 0.01) + 0.02, point.z);
 
         // Calculate perpendicular direction for road width
         let perpendicular;
