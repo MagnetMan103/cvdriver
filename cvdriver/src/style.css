@@ -91,3 +91,42 @@ canvas#overlay {
 #start, #end, #game {
   display: none;
 }
+
+#start {
+  display: flex;
+  background: black;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  width: 100vw;
+  position: relative;
+}
+
+#thumbs {
+  position: absolute;
+  left: 50%;
+  bottom: 32px;
+  transform: translateX(-50%);
+  background: rgba(220,220,220,0.7);
+  padding: 12px 24px;
+  border-radius: 16px;
+  display: block;
+  z-index: 2;
+  width: 70vw;
+  height: auto;
+}
+
+#image1 {
+  height: 25%;
+  width: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+#start video {
+  height: 75%;
+  width: auto;
+  display: block;
+  margin: 0 auto;
+}
