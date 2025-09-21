@@ -44,6 +44,13 @@ export class WorldManager {
     this.treeGroup = new THREE.Group();
     if (this.scene) this.scene.add(this.treeGroup);
 
+        // Coin system
+        this.coinGroup = new THREE.Group();
+        this.coins = []; // { mesh, collected }
+        this.coinGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.12, 20);
+        this.coinMaterial = new THREE.MeshStandardMaterial({ color: 0xFFD700, emissive: 0x554400, metalness: 0.7, roughness: 0.3 });
+        if (this.scene) this.scene.add(this.coinGroup);
+
         // Reusable tree assets
         this.trunkGeometry = new THREE.CylinderGeometry(0.3, 0.5, 2, 6);
         this.foliageGeometry = new THREE.ConeGeometry(2.2, 4, 8);
@@ -55,6 +62,10 @@ export class WorldManager {
         this.carStatsCard = null;
         this.toggleBtn = null;
         this.ctrlDebug = null;
+    // Scoring
+    this.coinsCollected = 0;
+    this.scoreCard = null;
+    this.scorePopups = []; // {el, start, duration, y, vy}
 
         this.init();
     }
@@ -152,6 +163,7 @@ export class WorldManager {
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x0096FF);
         if (this.treeGroup) this.scene.add(this.treeGroup);
+        if (this.coinGroup) this.scene.add(this.coinGroup); // ensure coins group added after scene exists
     }
 
     setupCameras() {
@@ -228,6 +240,19 @@ export class WorldManager {
         this.ctrlDebug.style.color = '#fff';
         this.ctrlDebug.style.whiteSpace = 'pre';
         document.body.appendChild(this.ctrlDebug);
+
+        // Score card (restored)
+        this.scoreCard = document.createElement('div');
+        this.scoreCard.style.position = 'absolute';
+        this.scoreCard.style.top = '10px';
+        this.scoreCard.style.left = '140px';
+        this.scoreCard.style.padding = '10px';
+        this.scoreCard.style.backgroundColor = 'rgba(0,0,0,0.55)';
+        this.scoreCard.style.fontFamily = 'monospace';
+        this.scoreCard.style.fontSize = '16px';
+        this.scoreCard.style.color = '#FFD700';
+        this.scoreCard.textContent = 'Score: 0';
+        document.body.appendChild(this.scoreCard);
     }
 
     setupEventListeners() {
@@ -527,6 +552,9 @@ export class WorldManager {
 
         // Add background trees outside fences
         this.generateTrees(points);
+
+        // Add coins on this segment
+        this.generateCoinClusters(points);
     }
 
     setupNextFrame(x, y = 0, z, angle = 0) {
@@ -628,6 +656,10 @@ export class WorldManager {
         // Update control debug
         const c = car.controls;
         this.ctrlDebug.textContent = `W:${c.forward?'1':'0'} S:${c.backward?'1':'0'} A:${c.left?'1':'0'} D:${c.right?'1':'0'} HB:${c.handbrake?'1':'0'}\nSpeed:${car.velocity.length().toFixed(2)}`;
+
+        // Score calc
+        const score = Math.floor(Math.abs(player.position.z)) + this.coinsCollected * 100;
+        if (this.scoreCard) this.scoreCard.textContent = `Score: ${score}`;
     }
 
     render(player, car, physicsManager) {
@@ -651,6 +683,11 @@ export class WorldManager {
         // Update UI
         this.updateUI(player, car);
 
+        // Update coins (rotation + collection)
+        this.updateCoins(car);
+        // Update score popups
+        this.updateScorePopups();
+
         // Render scene
         const camera = this.usePlayerCamera ? this.playerCamera : this.overviewCamera;
         this.renderer.render(this.scene, camera);
@@ -658,5 +695,114 @@ export class WorldManager {
 
     getScene() {
         return this.scene;
+    }
+
+    // ===== Score Popup System (restored) =====
+    createScorePopup(amount = 100) {
+        const el = document.createElement('div');
+        el.textContent = `+${amount}`;
+        el.style.position = 'absolute';
+        el.style.pointerEvents = 'none';
+        el.style.left = '50%';
+        el.style.top = '55%';
+        el.style.transform = 'translate(-50%, -50%)';
+        el.style.fontFamily = 'monospace';
+        el.style.fontSize = '28px';
+        el.style.fontWeight = 'bold';
+        el.style.color = '#FFD700';
+        el.style.textShadow = '0 0 6px rgba(255,215,0,0.9), 0 0 12px rgba(255,140,0,0.6)';
+        el.style.opacity = '1';
+        document.body.appendChild(el);
+        this.scorePopups.push({ el, start: performance.now(), duration: 1000, y: 0, vy: -0.04 });
+    }
+
+    updateScorePopups() {
+        if (!this.scorePopups.length) return;
+        const now = performance.now();
+        for (let i = this.scorePopups.length - 1; i >= 0; i--) {
+            const p = this.scorePopups[i];
+            const t = (now - p.start) / p.duration;
+            if (t >= 1) {
+                p.el.remove();
+                this.scorePopups.splice(i, 1);
+                continue;
+            }
+            p.y += p.vy;
+            const ease = t*t*(3-2*t);
+            const opacity = 1 - ease;
+            p.el.style.opacity = opacity.toFixed(3);
+            p.el.style.transform = `translate(-50%, calc(-50% + ${p.y * 120}px))`;
+        }
+    }
+
+    // ================= Coin System =================
+    createCoin(x, y, z) {
+        const mesh = new THREE.Mesh(this.coinGeometry, this.coinMaterial);
+        mesh.position.set(x, y, z);
+        mesh.rotation.x = Math.PI / 2; // face camera style (flat vertical)
+        mesh.castShadow = false;
+        mesh.receiveShadow = false;
+        this.coinGroup.add(mesh);
+        this.coins.push({ mesh, collected: false });
+        return mesh;
+    }
+
+    generateCoinClusters(roadPoints) {
+        if (!roadPoints || roadPoints.length < 2) return;
+        // Chance to create clusters along the segment
+        for (let i = 1; i < roadPoints.length - 1; i++) {
+            if (Math.random() > 0.15) continue; // ~15% of candidate points spawn a cluster
+
+            const current = roadPoints[i];
+            const next = roadPoints[i + 1];
+            const dir = new THREE.Vector3(next.x - current.x, 0, next.z - current.z).normalize();
+            if (dir.lengthSq() === 0) continue;
+
+            // Slight lateral offset randomly (left/right of center of road)
+            const lateral = new THREE.Vector3(-dir.z, 0, dir.x); // perpendicular
+            const lateralOffset = (Math.random() - 0.5) * 4; // within road width roughly
+            const basePos = new THREE.Vector3(current.x, 1, current.z).add(lateral.multiplyScalar(lateralOffset));
+
+            const count = 3 + Math.floor(Math.random() * 2); // 3-4 coins
+            const spacing = 1.6; // distance between coins along direction
+            // Debug log first coin in cluster
+            console.debug('[Coins] Spawning cluster', count, 'at index', i, 'pos', basePos.x.toFixed(2), basePos.z.toFixed(2));
+            for (let c = 0; c < count; c++) {
+                const jitter = (Math.random() - 0.5) * 0.4;
+                const pos = basePos.clone().add(dir.clone().multiplyScalar(c * spacing + jitter));
+                // Vertical bob base offset random seed
+                pos.y = 1 + Math.random() * 0.2;
+                this.createCoin(pos.x, pos.y, pos.z);
+            }
+        }
+    }
+
+    updateCoins(car) {
+        if (!car || !this.coins.length) return;
+        const carPos = car.position; // Vector3 from car object
+        const collectRadiusSq = 1.2 * 1.2;
+        const time = performance.now() * 0.001;
+        for (const coin of this.coins) {
+            if (coin.collected) continue;
+            const mesh = coin.mesh;
+            // Simple spin & gentle bob
+            mesh.rotation.z += 0.08; // because we rotated X 90deg
+            mesh.position.y += Math.sin(time * 2 + mesh.id * 0.3) * 0.002; // subtle
+
+            const dx = mesh.position.x - carPos.x;
+            const dz = mesh.position.z - carPos.z;
+            if (dx * dx + dz * dz < collectRadiusSq) {
+                // Collected
+                coin.collected = true;
+                mesh.visible = false;
+                this.coinGroup.remove(mesh);
+                this.coinsCollected += 1;
+                this.createScorePopup(100);
+            }
+        }
+        // Optionally prune collected coins array over time
+        if (this.coins.length > 200) {
+            this.coins = this.coins.filter(c => !c.collected);
+        }
     }
 }
