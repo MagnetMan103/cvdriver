@@ -39,6 +39,17 @@ export class WorldManager {
         this.lastLeftFenceEnd = null;
         this.lastRightFenceEnd = null;
 
+    // Tree generation tracking
+    this.generatedTreeCells = new Set();
+    this.treeGroup = new THREE.Group();
+    if (this.scene) this.scene.add(this.treeGroup);
+
+        // Reusable tree assets
+        this.trunkGeometry = new THREE.CylinderGeometry(0.3, 0.5, 2, 6);
+        this.foliageGeometry = new THREE.ConeGeometry(2.2, 4, 8);
+        this.trunkMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+        this.leafMaterial = new THREE.MeshLambertMaterial({ color: 0x2E8B57 });
+
         // UI elements
         this.coordinatesCard = null;
         this.carStatsCard = null;
@@ -47,6 +58,80 @@ export class WorldManager {
 
         this.init();
     }
+
+    createTree(x, z, scaleJitter = 1) {
+        const group = new THREE.Group();
+        const trunk = new THREE.Mesh(this.trunkGeometry, this.trunkMaterial);
+        trunk.position.y = 1;
+        group.add(trunk);
+
+        const foliage = new THREE.Mesh(this.foliageGeometry, this.leafMaterial);
+        foliage.position.y = 3;
+        foliage.rotation.y = Math.random() * Math.PI;
+        group.add(foliage);
+
+        const s = 0.7 + Math.random() * 0.6 * scaleJitter;
+        group.scale.set(s, s, s);
+        group.position.set(x, 0, z);
+        return group;
+    }
+
+    generateTrees(roadPoints, roadWidth = 12, fenceOffset = 20) {
+        if (!roadPoints || roadPoints.length < 2) return;
+        const baseOffset = (roadWidth / 2) + fenceOffset;
+        // Iterate through every Nth point for performance
+        for (let i = 0; i < roadPoints.length; i += 2) {
+            const point = roadPoints[i];
+            const pos = new THREE.Vector3(point.x, 0, point.z);
+            // Determine forward/perpendicular
+            let perpendicular;
+            if (i === 0) {
+                const next = new THREE.Vector3(roadPoints[i + 1].x, 0, roadPoints[i + 1].z);
+                const forward = next.clone().sub(pos).normalize();
+                perpendicular = new THREE.Vector3(-forward.z, 0, forward.x);
+            } else if (i === roadPoints.length - 1) {
+                const prev = new THREE.Vector3(roadPoints[i - 1].x, 0, roadPoints[i - 1].z);
+                const forward = pos.clone().sub(prev).normalize();
+                perpendicular = new THREE.Vector3(-forward.z, 0, forward.x);
+            } else {
+                const prev = new THREE.Vector3(roadPoints[i - 1].x, 0, roadPoints[i - 1].z);
+                const next = new THREE.Vector3(roadPoints[i + 1].x, 0, roadPoints[i + 1].z);
+                const forward1 = pos.clone().sub(prev).normalize();
+                const forward2 = next.clone().sub(pos).normalize();
+                const avgForward = forward1.add(forward2).normalize();
+                perpendicular = new THREE.Vector3(-avgForward.z, 0, avgForward.x);
+            }
+
+            // Random number of trees per side (0-2)
+            const treesLeft = Math.random() < 0.7 ? (Math.random() < 0.4 ? 2 : 1) : 0;
+            const treesRight = Math.random() < 0.7 ? (Math.random() < 0.4 ? 2 : 1) : 0;
+
+            const placeTrees = (count, side) => {
+                for (let t = 0; t < count; t++) {
+                    const extra = 5 + Math.random() * 40; // distance beyond fence
+                    const lateral = baseOffset + extra;
+                    const jitterFwd = (Math.random() - 0.5) * 8; // forward jitter
+                    const forwardDir = perpendicular.clone().cross(new THREE.Vector3(0, 1, 0)).normalize();
+                    const basePos = pos.clone()
+                        .add(forwardDir.multiplyScalar(jitterFwd))
+                        .add(perpendicular.clone().multiplyScalar(side * lateral));
+                    // Snap to grid cell to prevent duplicates
+                    const cellSize = 6;
+                    const cellX = Math.round(basePos.x / cellSize) * cellSize;
+                    const cellZ = Math.round(basePos.z / cellSize) * cellSize;
+                    const key = cellX + ',' + cellZ;
+                    if (this.generatedTreeCells.has(key)) continue;
+                    this.generatedTreeCells.add(key);
+                    const tree = this.createTree(cellX + (Math.random()-0.5)*1.5, cellZ + (Math.random()-0.5)*1.5);
+                    this.treeGroup.add(tree);
+                }
+            };
+
+            placeTrees(treesLeft, 1);   // Left side (positive perpendicular)
+            placeTrees(treesRight, -1); // Right side (negative perpendicular)
+        }
+    }
+        
 
     init() {
         this.setupRenderer();
@@ -66,6 +151,7 @@ export class WorldManager {
     setupScene() {
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x0096FF);
+        if (this.treeGroup) this.scene.add(this.treeGroup);
     }
 
     setupCameras() {
@@ -438,6 +524,9 @@ export class WorldManager {
 
         // Add continuous fences
         this.addContinuousFences(points, physicsManager);
+
+        // Add background trees outside fences
+        this.generateTrees(points);
     }
 
     setupNextFrame(x, y = 0, z, angle = 0) {
