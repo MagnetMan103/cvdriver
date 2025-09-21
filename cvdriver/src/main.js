@@ -2,6 +2,7 @@
 import { WorldManager } from './worldgen.js';
 import { PhysicsManager } from './physics.js';
 import { getLatestThumbCount } from './camera.js';
+import { audio } from './audio.js';
 
 class Game {
     constructor() {
@@ -49,6 +50,7 @@ function pollThumbsUpToStart(game, startScreen, gameScreen) {
         if (thumbCount > 0) {
             startScreen.style.display = 'none';
             gameScreen.style.display = 'block';
+            try { audio.stopMenu(); audio.playStartup(1.0); audio.playEngineLoop(0.5); } catch {}
             game.init();
         } else {
             setTimeout(() => pollThumbsUpToStart(game, startScreen, gameScreen), 1000);
@@ -86,11 +88,14 @@ window.addEventListener('DOMContentLoaded', () => {
     const game = new Game();
 
     pollThumbsUpToStart(game, startScreen, gameScreen);
+    // Start menu music immediately (best-effort autoplay) and preload SFX
+    try { audio.playMenuAuto(0.5); audio.preloadSfx(); } catch {}
 
     if (startBtn) {
         startBtn.addEventListener('click', () => {
             startScreen.style.display = 'none';
             gameScreen.style.display = 'block';
+            try { audio.stopMenu(); audio.playStartup(0.9); audio.playEngineLoop(0.4); } catch {}
             game.init();
         });
     }
@@ -99,6 +104,7 @@ window.addEventListener('DOMContentLoaded', () => {
         restartBtn.addEventListener('click', () => {
             endScreen.style.display = 'none';
             gameScreen.style.display = 'block';
+            try { audio.stopMenu(); audio.playStartup(0.9); audio.playEngineLoop(0.4); } catch {}
             game.init();
         });
     }

@@ -1,6 +1,7 @@
 // world-manager.js - Handles world generation, rendering, and visual elements
 import * as THREE from 'three';
 import {getLatestThumbCount} from "./camera.js";
+import { audio } from './audio.js';
 
 const gameContainer = document.getElementById("game")
 function generateRoadSchematic(initialX, initialY, initialZ = 0, initialAngle = 0) {
@@ -1060,6 +1061,7 @@ export class WorldManager {
                 this.coinGroup.remove(mesh);
                 this.coinsCollected += 1;
                 this.createScorePopup(100);
+                try { audio.playCoin(0.7); } catch {}
             }
         }
         // Optionally prune collected coins array over time

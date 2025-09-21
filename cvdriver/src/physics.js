@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { Car } from './playerobject.js';
 import { getLatestHandData } from './camera.js';
+import { audio } from './audio.js';
 
 export class PhysicsManager {
     constructor() {
@@ -192,6 +193,8 @@ export class PhysicsManager {
                 Math.abs(playerPos.z - npcPos.z);
 
             if (manhattanDistance < collisionDistance) {
+                // Play pew just before we modify physics to minimize perceived latency
+                try { audio.playPew(0.85); } catch {}
                 this.launchNpcCar(npcCar);
 
                 // Call the car hit callback to update score and show popup
