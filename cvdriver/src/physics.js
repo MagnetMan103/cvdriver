@@ -12,8 +12,10 @@ export class PhysicsManager {
         this.player = null;
         this.obstacleBody = null;
         this.obstacleMesh = null;
-    this.scene = null; // Scene reference
-    this._foreignDebris = []; // Track spawned debris from NPC explosions for cleanup
+        this.scene = null;  // Store scene reference for creating flying cars
+        
+        // Track flying cars for cleanup
+        this.flyingCars = [];  // Array of { body, mesh, createdTime }
 
         // Input handling
         this.HAND_INPUT = {
@@ -116,20 +118,63 @@ export class PhysicsManager {
 
     handleCollisions() {
         if (!this.eventQueue || !this.car) return;
+
         this.eventQueue.drainCollisionEvents((h1, h2, started) => {
             if (!started) return;
+
             const carHandle = this.car.getColliderHandle();
             if (carHandle == null) return;
+
             let other = null;
-            if (h1 === carHandle) other = h2; else if (h2 === carHandle) other = h1;
+            if (h1 === carHandle) {
+                other = h2;
+            } else if (h2 === carHandle) {
+                other = h1;
+            }
+
             if (other == null) return;
+
             const otherCollider = this.world.getCollider(other);
-            if (!otherCollider) return;
-            const otherRB = otherCollider.parent();
-            if (!otherRB || otherRB === this.car.body) return;
-            if (otherRB.bodyType && otherRB.bodyType() === this.RAPIER.RigidBodyType.Fixed) return;
-            this._explodeForeignBody(otherRB);
+            if (otherCollider) {
+                // Direct collider tag check
+                if (otherCollider.__npcCarRef) {
+                    console.log('[Physics] Player collided with NPC collider', other, 'destroying NPC');
+                    otherCollider.__npcCarRef.destroy();
+                } else {
+                    const otherRB = otherCollider.parent();
+                    if (otherRB && otherRB.__npcCarRef) {
+                        console.log('[Physics] Player collided with NPC body', otherRB.handle, 'destroying NPC');
+                        otherRB.__npcCarRef.destroy();
+                    } else if (otherRB && otherRB !== this.car.body && otherRB.bodyType && otherRB.bodyType() !== this.RAPIER.RigidBodyType.Fixed) {
+                        // Fallback flying car logic remains
+                        console.log('[Physics] Collision with non-NPC dynamic body, spawning flying replacement');
+                        const currentPos = otherRB.translation();
+                        const currentRot = otherRB.rotation();
+                        try { this.world.removeRigidBody(otherRB); } catch (e) { console.warn('Failed to remove rigid body:', e); }
+                        const flyingCarResult = this.createFlyingCar(currentPos, currentRot);
+                        if (flyingCarResult && flyingCarResult.body) {
+                            const newRB = flyingCarResult.body;
+                            const carMesh = flyingCarResult.mesh;
+                            const speed = this.car.getSpeed ? this.car.getSpeed() : 0;
+                            const initialYBoost = 5 + Math.random() * 3;
+                            const newPos = { x: currentPos.x, y: currentPos.y + initialYBoost, z: currentPos.z };
+                            newRB.setTranslation(newPos, true);
+                            const flyingCarData = { body: newRB, mesh: carMesh, initialY: newPos.y, targetY: newPos.y + 20 + Math.random() * 15, riseSpeed: 15 + Math.random() * 10, startTime: performance.now(), duration: 2000 + Math.random() * 1000 };
+                            this.flyingCars.push(flyingCarData);
+                            const lateralSpeed = 20 + Math.random() * 25 + speed * 0.8;
+                            const lateralAngle = Math.random() * Math.PI * 2;
+                            const lateralX = Math.cos(lateralAngle) * lateralSpeed;
+                            const lateralZ = Math.sin(lateralAngle) * lateralSpeed;
+                            newRB.setLinvel({ x: lateralX, y: 0, z: lateralZ }, true);
+                            if (newRB.setGravityScale) newRB.setGravityScale(0, true);
+                            newRB.setAngvel({ x: (Math.random() - 0.5) * 15, y: (Math.random() - 0.5) * 10, z: (Math.random() - 0.5) * 15 }, true);
+                        }
+                    }
+                }
+            }
+
             if (this.car.shouldExplodeFromCollision(other, new Set())) {
+                console.log('[Physics] Player car exploding due to collision with handle', other);
                 this.car.explode();
             }
         });
@@ -182,8 +227,8 @@ export class PhysicsManager {
             // Check obstacle collision (if obstacle exists)
             this.checkObstacleCollision();
             
-            // Clean up foreign debris
-            this._cleanupForeignDebris();
+            // Clean up old flying cars
+            this.cleanupFlyingCars();
 
             this.physicsTimeAccumulator -= this.FIXED_TIMESTEP;
         }
@@ -206,53 +251,126 @@ export class PhysicsManager {
         return this.RAPIER;
     }
 
-    _cleanupForeignDebris() {
-        if (!this._foreignDebris.length) return;
+    cleanupFlyingCars() {
+        if (!this.flyingCars.length) return;
+        
         const now = performance.now();
-        for (let i = this._foreignDebris.length - 1; i >= 0; i--) {
-            const d = this._foreignDebris[i];
-            if (now - d.spawnTime > d.lifeMs) {
-                try { this.world.removeRigidBody(d.body); } catch(e) {}
-                if (d.mesh && this.scene) this.scene.remove(d.mesh);
-                this._foreignDebris.splice(i,1);
-            } else {
-                // sync mesh transform
-                const t = d.body.translation();
-                const r = d.body.rotation();
-                d.mesh.position.set(t.x,t.y,t.z);
-                d.mesh.quaternion.set(r.x,r.y,r.z,r.w);
+        const maxLifetime = 10000; // 10 seconds
+        const maxDistance = 300;   // 300 units from origin
+        
+        for (let i = this.flyingCars.length - 1; i >= 0; i--) {
+            const flyingCar = this.flyingCars[i];
+            
+            // Handle manual Y coordinate animation
+            if (flyingCar.startTime && flyingCar.duration) {
+                const elapsed = now - flyingCar.startTime;
+                const progress = Math.min(1, elapsed / flyingCar.duration);
+                
+                if (progress < 1) {
+                    // Animate Y coordinate manually
+                    const currentY = flyingCar.initialY + (flyingCar.targetY - flyingCar.initialY) * progress;
+                    const currentPos = flyingCar.body.translation();
+                    
+                    flyingCar.body.setTranslation({
+                        x: currentPos.x,
+                        y: currentY,
+                        z: currentPos.z
+                    }, true);
+                }
+            }
+            
+            // Check for cleanup conditions
+            const age = flyingCar.createdTime ? (now - flyingCar.createdTime) : (now - flyingCar.startTime);
+            const position = flyingCar.body.translation();
+            const distanceFromOrigin = Math.sqrt(position.x * position.x + position.y * position.y + position.z * position.z);
+            
+            // Remove if too old, too far away, or fallen too low
+            if (age > maxLifetime || distanceFromOrigin > maxDistance || position.y < -50) {
+                try {
+                    // Remove physics body
+                    this.world.removeRigidBody(flyingCar.body);
+                    
+                    // Remove visual mesh
+                    if (flyingCar.mesh && this.scene) {
+                        this.scene.remove(flyingCar.mesh);
+                    }
+                } catch (e) {
+                    console.warn('Failed to cleanup flying car:', e);
+                }
+                
+                // Remove from tracking array
+                this.flyingCars.splice(i, 1);
             }
         }
     }
 
-    _explodeForeignBody(body) {
-        if (!this.scene || !body) return;
-        const pos = body.translation();
-        try { this.world.removeRigidBody(body); } catch(e) {}
-        const pieceCount = 14 + Math.floor(Math.random()*6);
-        for (let i=0;i<pieceCount;i++) {
-            const size = 0.3 + Math.random()*0.4;
-            const geo = new THREE.BoxGeometry(size,size,size);
-            const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(Math.random(),0.7,0.55), metalness:0.3, roughness:0.6 });
-            const mesh = new THREE.Mesh(geo, mat);
-            mesh.position.set(pos.x, pos.y + 0.5, pos.z);
-            this.scene.add(mesh);
-            const rbDesc = this.RAPIER.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y + 0.5, pos.z);
-            const rb = this.world.createRigidBody(rbDesc);
-            const colDesc = this.RAPIER.ColliderDesc.cuboid(size/2,size/2,size/2).setRestitution(0.5).setFriction(0.6);
-            this.world.createCollider(colDesc, rb);
-            const impulseScale = 55;
-            rb.applyImpulse({
-                x:(Math.random()-0.5)*impulseScale,
-                y:Math.random()*impulseScale*0.9 + 18,
-                z:(Math.random()-0.5)*impulseScale
-            }, true);
-            rb.applyTorqueImpulse({
-                x:(Math.random()-0.5)*400,
-                y:(Math.random()-0.5)*400,
-                z:(Math.random()-0.5)*400
-            }, true);
-            this._foreignDebris.push({ body: rb, mesh, spawnTime: performance.now(), lifeMs: 8000 + Math.random()*4000 });
+    // Create a new flying car at the specified position
+    createFlyingCar(position, rotation = null) {
+        if (!this.world || !this.RAPIER) return null;
+        
+        try {
+            // Create new dynamic rigid body at the collision position
+            const rbDesc = this.RAPIER.RigidBodyDesc.dynamic()
+                .setTranslation(position.x, position.y, position.z)
+                .setCanSleep(false);
+            
+            if (rotation) {
+                rbDesc.setRotation({ x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w });
+            }
+            
+            const newBody = this.world.createRigidBody(rbDesc);
+            
+            // Create collider for the new car
+            const colliderDesc = this.RAPIER.ColliderDesc.cuboid(0.9, 0.6, 1.8)
+                .setFriction(0.8)
+                .setRestitution(0.1);
+            
+            const newCollider = this.world.createCollider(colliderDesc, newBody);
+            
+            // Set physics properties optimized for flying
+            newBody.setLinearDamping(0.1);   // Less air resistance for farther flight
+            newBody.setAngularDamping(0.5);  // Allow more spinning
+            
+            // Create visual representation
+            if (this.scene) {
+                const carGroup = new THREE.Group();
+                
+                // Car body
+                const bodyGeometry = new THREE.BoxGeometry(1.8, 0.6, 3.6);
+                const bodyMaterial = new THREE.MeshLambertMaterial({ 
+                    color: new THREE.Color().setHSL(Math.random(), 0.6, 0.45) 
+                });
+                const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
+                bodyMesh.position.y = 0.3;
+                carGroup.add(bodyMesh);
+                
+                // Car cabin/windshield
+                const cabinGeometry = new THREE.BoxGeometry(1.4, 0.4, 1.2);
+                const cabinMaterial = new THREE.MeshLambertMaterial({ 
+                    color: 0x222244, 
+                    transparent: true, 
+                    opacity: 0.7 
+                });
+                const cabinMesh = new THREE.Mesh(cabinGeometry, cabinMaterial);
+                cabinMesh.position.set(0, 0.6, 0.3);
+                carGroup.add(cabinMesh);
+                
+                carGroup.position.set(position.x, position.y, position.z);
+                if (rotation) {
+                    carGroup.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+                }
+                
+                this.scene.add(carGroup);
+                
+                // Return both body and mesh for external tracking
+                return { body: newBody, mesh: carGroup };
+            }
+            
+            return newBody;
+            
+        } catch (error) {
+            console.error('Failed to create flying car:', error);
+            return null;
         }
     }
 
