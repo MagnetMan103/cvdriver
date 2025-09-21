@@ -1,7 +1,22 @@
 // world-manager.js - Handles world generation, rendering, and visual elements
 import * as THREE from 'three';
-import { generateRoadSchematic } from "./mapgen.js";
+function generateRoadSchematic(initialX, initialY, initialZ = 0, initialAngle = 0) {
+    // returns an array of points representing a path of the road that will be like a parabola with curves and turns
+    const points = [];
+    let z = initialZ;
+    let x = initialX;
+    let y = initialY;
+    let angle = initialAngle; // Start from the provided initial angle instead of 0
 
+    for (let i = 0; i < 20; i++) {
+        z -= 20;
+        angle += (Math.random() - 0.5) * 3; // random small turn
+        x += Math.sin(angle) * 6; // curve effect
+        y = 0 // flat road for now, can add hills later
+        points.push({ x, y, z, angle });
+    }
+    return points;
+}
 export class WorldManager {
     constructor() {
         this.scene = null;
@@ -17,6 +32,12 @@ export class WorldManager {
         this.lastRoad = { x: 0, y: 0, z: 0, theta: 0 };
         this.lastGeneratedSegmentCount = 0;
         this.lastRoadEndPoint = null;
+
+        // Fence continuity tracking
+        this.leftFencePoints = [];
+        this.rightFencePoints = [];
+        this.lastLeftFenceEnd = null;
+        this.lastRightFenceEnd = null;
 
         // UI elements
         this.coordinatesCard = null;
@@ -211,20 +232,190 @@ export class WorldManager {
         });
     }
 
-    createFenceSegment(start, end, height = 2, thickness = 0.2, color = 0xffffff) {
-        const length = start.distanceTo(end);
-        const geometry = new THREE.BoxGeometry(thickness, height, length);
-        const material = new THREE.MeshLambertMaterial({ color });
-        const fence = new THREE.Mesh(geometry, material);
+    createContinuousFence(fencePoints, height = 2, thickness = 0.2, color = 0xffffff) {
+        if (fencePoints.length < 2) return null;
 
-        const mid = start.clone().add(end).multiplyScalar(0.5);
-        fence.position.set(mid.x, mid.y + height / 2, mid.z);
+        // Create fence segments between consecutive points
+        const fenceGroup = new THREE.Group();
 
-        const direction = end.clone().sub(start);
-        const angle = Math.atan2(direction.x, direction.z);
-        fence.rotation.y = angle;
+        for (let i = 0; i < fencePoints.length - 1; i++) {
+            const start = fencePoints[i];
+            const end = fencePoints[i + 1];
 
-        return fence;
+            const length = start.distanceTo(end);
+            if (length < 0.1) continue; // Skip very small segments
+
+            const geometry = new THREE.BoxGeometry(thickness, height, length);
+            const material = new THREE.MeshLambertMaterial({ color });
+            const fence = new THREE.Mesh(geometry, material);
+
+            const mid = start.clone().add(end).multiplyScalar(0.5);
+            fence.position.set(mid.x, mid.y + height / 2, mid.z);
+
+            const direction = end.clone().sub(start);
+            const angle = Math.atan2(direction.x, direction.z);
+            fence.rotation.y = angle;
+
+            fenceGroup.add(fence);
+        }
+
+        return fenceGroup;
+    }
+
+    // Check if two line segments intersect (2D check, ignoring Y)
+    linesIntersect(p1, q1, p2, q2) {
+        const orientation = (p, q, r) => {
+            const val = (q.z - p.z) * (r.x - q.x) - (q.x - p.x) * (r.z - q.z);
+            if (Math.abs(val) < 0.001) return 0; // Collinear
+            return val > 0 ? 1 : 2; // Clockwise or counterclockwise
+        };
+
+        const onSegment = (p, q, r) => {
+            return q.x <= Math.max(p.x, r.x) && q.x >= Math.min(p.x, r.x) &&
+                q.z <= Math.max(p.z, r.z) && q.z >= Math.min(p.z, r.z);
+        };
+
+        const o1 = orientation(p1, q1, p2);
+        const o2 = orientation(p1, q1, q2);
+        const o3 = orientation(p2, q2, p1);
+        const o4 = orientation(p2, q2, q1);
+
+        // General case
+        if (o1 !== o2 && o3 !== o4) return true;
+
+        // Special cases
+        if (o1 === 0 && onSegment(p1, p2, q1)) return true;
+        if (o2 === 0 && onSegment(p1, q2, q1)) return true;
+        if (o3 === 0 && onSegment(p2, p1, q2)) return true;
+        if (o4 === 0 && onSegment(p2, q1, q2)) return true;
+
+        return false;
+    }
+
+    // Remove self-intersecting segments from fence points
+    removeSelfIntersections(fencePoints) {
+        if (fencePoints.length < 4) return fencePoints;
+
+        const cleanedPoints = [fencePoints[0]];
+
+        for (let i = 1; i < fencePoints.length; i++) {
+            const currentPoint = fencePoints[i];
+            let shouldAdd = true;
+
+            // Check if adding this point would create intersections with previous segments
+            if (cleanedPoints.length >= 2) {
+                const newSegmentStart = cleanedPoints[cleanedPoints.length - 1];
+                const newSegmentEnd = currentPoint;
+
+                // Check against all previous segments except the immediate previous one
+                for (let j = 0; j < cleanedPoints.length - 2; j++) {
+                    const prevSegmentStart = cleanedPoints[j];
+                    const prevSegmentEnd = cleanedPoints[j + 1];
+
+                    if (this.linesIntersect(newSegmentStart, newSegmentEnd, prevSegmentStart, prevSegmentEnd)) {
+                        shouldAdd = false;
+                        break;
+                    }
+                }
+            }
+
+            // Also check minimum distance to prevent overcrowding
+            if (shouldAdd && cleanedPoints.length > 0) {
+                const lastPoint = cleanedPoints[cleanedPoints.length - 1];
+                const distance = currentPoint.distanceTo(lastPoint);
+                if (distance < 2.0) { // Minimum distance threshold
+                    shouldAdd = false;
+                }
+            }
+
+            if (shouldAdd) {
+                cleanedPoints.push(currentPoint);
+            }
+        }
+
+        return cleanedPoints;
+    }
+
+    generateFencePoints(roadPoints, roadWidth = 12, fenceOffset = 20) { // Doubled from 10 to 20
+        const leftFencePoints = [];
+        const rightFencePoints = [];
+
+        for (let i = 0; i < roadPoints.length; i++) {
+            const point = roadPoints[i];
+            const pos = new THREE.Vector3(point.x, (point.y || 0.01) + 0.02, point.z);
+            let perpendicular;
+
+            // Calculate perpendicular direction for fence offset
+            if (i === 0 && roadPoints.length > 1) {
+                const next = new THREE.Vector3(roadPoints[i + 1].x, roadPoints[i + 1].y || 0, roadPoints[i + 1].z);
+                const forward = next.clone().sub(pos).normalize();
+                perpendicular = new THREE.Vector3(-forward.z, 0, forward.x);
+            } else if (i === roadPoints.length - 1) {
+                const prev = new THREE.Vector3(roadPoints[i - 1].x, roadPoints[i - 1].y || 0, roadPoints[i - 1].z);
+                const forward = pos.clone().sub(prev).normalize();
+                perpendicular = new THREE.Vector3(-forward.z, 0, forward.x);
+            } else {
+                const prev = new THREE.Vector3(roadPoints[i - 1].x, roadPoints[i - 1].y || 0, roadPoints[i - 1].z);
+                const next = new THREE.Vector3(roadPoints[i + 1].x, roadPoints[i + 1].y || 0, roadPoints[i + 1].z);
+                const forward1 = pos.clone().sub(prev).normalize();
+                const forward2 = next.clone().sub(pos).normalize();
+                const avgForward = forward1.add(forward2).normalize();
+                perpendicular = new THREE.Vector3(-avgForward.z, 0, avgForward.x);
+            }
+
+            // Create fence points at offset distance from road
+            const leftPoint = pos.clone().add(perpendicular.clone().multiplyScalar((roadWidth / 2) + fenceOffset));
+            const rightPoint = pos.clone().add(perpendicular.clone().multiplyScalar(-(roadWidth / 2) - fenceOffset));
+
+            leftFencePoints.push(leftPoint);
+            rightFencePoints.push(rightPoint);
+        }
+
+        // Remove self-intersections from both fence lines
+        const cleanedLeftPoints = this.removeSelfIntersections(leftFencePoints);
+        const cleanedRightPoints = this.removeSelfIntersections(rightFencePoints);
+
+        return { leftFencePoints: cleanedLeftPoints, rightFencePoints: cleanedRightPoints };
+    }
+
+    addContinuousFences(roadPoints, physicsManager) {
+        const { leftFencePoints, rightFencePoints } = this.generateFencePoints(roadPoints);
+
+        // Connect with previous fence points if they exist
+        let finalLeftPoints = [...leftFencePoints];
+        let finalRightPoints = [...rightFencePoints];
+
+        if (this.lastLeftFenceEnd && this.lastRightFenceEnd) {
+            // Add connecting points to ensure continuity
+            finalLeftPoints.unshift(this.lastLeftFenceEnd);
+            finalRightPoints.unshift(this.lastRightFenceEnd);
+        }
+
+        // Create continuous fence meshes
+        const leftFence = this.createContinuousFence(finalLeftPoints);
+        const rightFence = this.createContinuousFence(finalRightPoints);
+
+        if (leftFence) {
+            this.scene.add(leftFence);
+
+            // Add physics colliders for left fence
+            for (let i = 0; i < finalLeftPoints.length - 1; i++) {
+                physicsManager.addFenceCollider(finalLeftPoints[i], finalLeftPoints[i + 1]);
+            }
+        }
+
+        if (rightFence) {
+            this.scene.add(rightFence);
+
+            // Add physics colliders for right fence
+            for (let i = 0; i < finalRightPoints.length - 1; i++) {
+                physicsManager.addFenceCollider(finalRightPoints[i], finalRightPoints[i + 1]);
+            }
+        }
+
+        // Store the end points for next segment continuity
+        this.lastLeftFenceEnd = leftFencePoints[leftFencePoints.length - 1];
+        this.lastRightFenceEnd = rightFencePoints[rightFencePoints.length - 1];
     }
 
     addCurvyRoadSegment(points, physicsManager) {
@@ -245,30 +436,8 @@ export class WorldManager {
         // Add physics colliders through physics manager
         physicsManager.addRoadColliders(points);
 
-        // Add fences
-        const roadWidth = 12;
-        const fenceOffset = 10;
-
-        for (let i = 0; i < points.length - 1; i++) {
-            const p1 = new THREE.Vector3(points[i].x, (points[i].y || 0.01) + 0.02, points[i].z);
-            const p2 = new THREE.Vector3(points[i + 1].x, (points[i + 1].y || 0.01) + 0.02, points[i + 1].z);
-            const forward = p2.clone().sub(p1).normalize();
-            const perpendicular = new THREE.Vector3(-forward.z, 0, forward.x);
-
-            // Left fence
-            const leftStart = p1.clone().add(perpendicular.clone().multiplyScalar((roadWidth / 2) + fenceOffset));
-            const leftEnd = p2.clone().add(perpendicular.clone().multiplyScalar((roadWidth / 2) + fenceOffset));
-            const leftFence = this.createFenceSegment(leftStart, leftEnd);
-            this.scene.add(leftFence);
-            physicsManager.addFenceCollider(leftStart, leftEnd);
-
-            // Right fence
-            const rightStart = p1.clone().add(perpendicular.clone().multiplyScalar(-(roadWidth / 2) - fenceOffset));
-            const rightEnd = p2.clone().add(perpendicular.clone().multiplyScalar(-(roadWidth / 2) - fenceOffset));
-            const rightFence = this.createFenceSegment(rightStart, rightEnd);
-            this.scene.add(rightFence);
-            physicsManager.addFenceCollider(rightStart, rightEnd);
-        }
+        // Add continuous fences
+        this.addContinuousFences(points, physicsManager);
     }
 
     setupNextFrame(x, y = 0, z, angle = 0) {
