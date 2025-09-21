@@ -87,3 +87,7 @@ canvas#overlay {
   width: 100% !important;
   height: 100% !important;
 }
+
+#start, #end, #game {
+  display: none;
+}

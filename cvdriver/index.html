@@ -2,13 +2,22 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Cruise Control</title>
+  <title>Road Rage</title>
   <link rel="stylesheet" type="text/css" href="./src/style.css">
   <style>
     body { margin: 0; }
   </style>
 </head>
 <body>
+<div id="start">
+  <h1>Road Rage</h1>
+  <video id="startingvid" autoplayplaysinline></video>
+</div>
+<div id="end">
+  <h1>Game Over</h1>
+  <button id="restart-button">Restart Game</button>
+</div>
+<div id="game">
 <div id="app">
   <video id="video" autoplayplaysinline></video>
   <canvas id="overlay"></canvas>
@@ -21,7 +30,8 @@
     </div>
   </div>
 </div>
-<canvas id="three-canvas"></canvas>
+  <canvas id="three-canvas"></canvas>
+</div>
 <script src="./src/main.js" type="module"></script>
 <script src="./src/camera.js" type="module"></script>
 

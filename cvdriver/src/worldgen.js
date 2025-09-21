@@ -1,6 +1,8 @@
 // world-manager.js - Handles world generation, rendering, and visual elements
 import * as THREE from 'three';
 import {getLatestThumbCount} from "./camera.js";
+
+const gameContainer = document.getElementById("game")
 function generateRoadSchematic(initialX, initialY, initialZ = 0, initialAngle = 0) {
     // returns an array of points representing a path of the road that will be like a parabola with curves and turns
     const points = [];
@@ -209,19 +211,28 @@ export class WorldManager {
         this.coordinatesCard.style.fontFamily = 'monospace';
         this.coordinatesCard.style.fontSize = '14px';
         this.coordinatesCard.textContent = 'Coordinates: (0, 0, 0)';
-        document.body.appendChild(this.coordinatesCard);
+        gameContainer.appendChild(this.coordinatesCard);
 
-        // Car stats card
+        // Car stats card as a larger circular speedometer
         this.carStatsCard = document.createElement('div');
         this.carStatsCard.style.position = 'absolute';
-        this.carStatsCard.style.top = '10px';
-        this.carStatsCard.style.right = '10px';
-        this.carStatsCard.style.padding = '10px';
-        this.carStatsCard.style.backgroundColor = 'rgba(255, 255, 255, 0.8)';
+        this.carStatsCard.style.top = '30px';
+        this.carStatsCard.style.right = '30px';
+        this.carStatsCard.style.width = '160px';
+        this.carStatsCard.style.height = '160px';
+        this.carStatsCard.style.padding = '30px';
+        this.carStatsCard.style.borderRadius = '50%';
+        this.carStatsCard.style.background = 'radial-gradient(circle at 60% 40%, #fff 70%, #ccc 100%)';
+        this.carStatsCard.style.display = 'flex';
+        this.carStatsCard.style.alignItems = 'center';
+        this.carStatsCard.style.justifyContent = 'center';
         this.carStatsCard.style.fontFamily = 'monospace';
-        this.carStatsCard.style.fontSize = '14px';
-        this.carStatsCard.textContent = 'Speed: 0 | Steering: 0';
-        document.body.appendChild(this.carStatsCard);
+        this.carStatsCard.style.textAlign = 'center';
+        this.carStatsCard.style.fontSize = '60px';
+        this.carStatsCard.style.fontWeight = 'bold';
+        this.carStatsCard.style.boxShadow = '0 2px 18px rgba(0,0,0,0.18)';
+        this.carStatsCard.textContent = '0 \n mph';
+        gameContainer.appendChild(this.carStatsCard);
 
         // Control debug
         this.ctrlDebug = document.createElement('div');
@@ -234,7 +245,7 @@ export class WorldManager {
         this.ctrlDebug.style.background = 'rgba(0,0,0,0.4)';
         this.ctrlDebug.style.color = '#fff';
         this.ctrlDebug.style.whiteSpace = 'pre';
-        document.body.appendChild(this.ctrlDebug);
+        gameContainer.appendChild(this.ctrlDebug);
 
         // Score card (restored)
         this.scoreCard = document.createElement('div');
@@ -248,7 +259,7 @@ export class WorldManager {
         this.scoreCard.style.fontWeight = 'bold';
         this.scoreCard.style.color = '#FFD700';
         this.scoreCard.textContent = 'Score: 0';
-        document.body.appendChild(this.scoreCard);
+        gameContainer.appendChild(this.scoreCard);
     }
 
     setupEventListeners() {
@@ -643,9 +654,26 @@ export class WorldManager {
         // Update coordinates
         this.coordinatesCard.textContent = `Coordinates: (${player.position.x.toFixed(2)}, ${player.position.y.toFixed(2)}, ${player.position.z.toFixed(2)})`;
 
-        // Update car stats
-        this.carStatsCard.textContent = `Speed: ${car.velocity.length().toFixed(2)} | Steering: ${car.rotation.toFixed(2)}`;
-
+        // Calculate gradient color based on speed
+        const speed = car.velocity.length();
+        let color;
+        if (speed <= 50) {
+            // Interpolate white to yellow
+            const t = speed / 50;
+            const r = Math.round(255 * (1 - t) + 255 * t);
+            const g = Math.round(255 * (1 - t) + 224 * t);
+            const b = Math.round(255 * (1 - t) + 102 * t);
+            color = `rgb(${r},${g},${b})`;
+        } else {
+            // Interpolate yellow to light red
+            const t = Math.min((speed - 50) / 50, 1);
+            const r = Math.round(255 * (1 - t) + 255 * t);
+            const g = Math.round(224 * (1 - t) + 111 * t);
+            const b = Math.round(102 * (1 - t) + 111 * t);
+            color = `rgb(${r},${g},${b})`;
+        }
+        this.carStatsCard.style.background = `radial-gradient(circle at 60% 40%, ${color} 70%, #ccc 100%)`;
+        this.carStatsCard.textContent = `${speed.toFixed(0)} \n mph`;
         // Update control debug
         const c = car.controls;
         this.ctrlDebug.textContent = `W:${c.forward?'1':'0'} S:${c.backward?'1':'0'} A:${c.left?'1':'0'} D:${c.right?'1':'0'} HB:${c.handbrake?'1':'0'}\nSpeed:${car.velocity.length().toFixed(2)}`;
