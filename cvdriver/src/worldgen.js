@@ -177,7 +177,7 @@ export class WorldManager {
     }
 
     createSingleNpcCar(point, physicsManager) {
-        // Random car color
+        // Random car colors
         const colors = [0xff4444, 0x44ff44, 0x4444ff, 0xffff44, 0xff44ff, 0x44ffff, 0xffffff, 0x888888];
         const color = colors[Math.floor(Math.random() * colors.length)];
 
