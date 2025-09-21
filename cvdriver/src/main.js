@@ -17,6 +17,7 @@ class Game {
         try {
             this.worldManager = new WorldManager();
             this.physicsManager = new PhysicsManager();
+            this.physicsManager.setWorldManager(this.worldManager);
             const { car, player } = await this.physicsManager.init(this.worldManager.getScene());
             this.car = car;
             this.player = player;

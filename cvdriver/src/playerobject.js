@@ -101,7 +101,8 @@ class Car {
         const halfExtents = { x: 1.0, y: 1, z: 2.0 };
         const colliderDesc = RAPIER.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
             .setFriction(0.9)
-            .setRestitution(0.0);
+            .setRestitution(0.0)
+            .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
         this.collider = this.world.createCollider(colliderDesc, this.body);
         this.body.setLinearDamping(0.15);
         this.body.setAngularDamping(1.0);
