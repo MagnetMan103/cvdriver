@@ -13,6 +13,12 @@ export class PhysicsManager {
         this.obstacleBody = null;
         this.obstacleMesh = null;
 
+        // NPC Car management
+        this.npcCars = []; // Array of NPC car objects from WorldManager
+        this.npcCarBodies = new Map(); // Map of NPC car objects to their physics bodies
+        this.launchedNpcCars = new Set(); // Track which NPCs have been launched
+        this.carHitCallback = null; // Callback function for when player hits a car
+
         // Input handling
         this.HAND_INPUT = {
             maxThetaDeg: 90,
@@ -46,6 +52,210 @@ export class PhysicsManager {
             car: this.car,
             player: this.player
         };
+    }
+
+    // ===== NPC Car Physics =====
+    createNpcCarBody(npcCar) {
+        if (!npcCar || !npcCar.mesh) {
+            console.warn('[NPC Physics] Invalid npcCar or mesh');
+            return;
+        }
+
+        const position = npcCar.mesh.position;
+        const rotation = npcCar.mesh.rotation;
+
+        console.log(`[NPC Physics] Creating body at (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
+
+        // Create kinematic rigid body for NPC car (easier to control movement)
+        const rigidBodyDesc = this.RAPIER.RigidBodyDesc.kinematicPositionBased()
+            .setTranslation(position.x, position.y, position.z);
+
+        // Set initial rotation
+        const quat = new THREE.Quaternion();
+        quat.setFromEuler(new THREE.Euler(rotation.x, rotation.y, rotation.z));
+        rigidBodyDesc.setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
+
+        const rigidBody = this.world.createRigidBody(rigidBodyDesc);
+
+        // Create box collider for NPC car (similar to car dimensions)
+        const colliderDesc = this.RAPIER.ColliderDesc.cuboid(1.0, 0.5, 2.0) // width, height, length
+            .setRestitution(0.3)
+            .setFriction(0.8);
+
+        const collider = this.world.createCollider(colliderDesc, rigidBody);
+
+        // Store the body reference
+        npcCar.body = rigidBody;
+        this.npcCarBodies.set(npcCar, rigidBody);
+
+        console.log(`[NPC Physics] Created body with handle ${collider.handle}`);
+
+        return rigidBody;
+    }
+
+    removeNpcCarBody(body) {
+        if (!body) return;
+
+        // Find and remove from our tracking structures
+        for (const [npcCar, storedBody] of this.npcCarBodies.entries()) {
+            if (storedBody === body) {
+                this.npcCarBodies.delete(npcCar);
+                this.launchedNpcCars.delete(npcCar);
+                break;
+            }
+        }
+
+        // Remove from physics world
+        this.world.removeRigidBody(body);
+    }
+
+    updateNpcCar(npcCar, deltaTime) {
+        if (!npcCar.body || !npcCar.mesh) return;
+
+        // If car has been launched, switch to dynamic mode and let physics handle it
+        if (this.launchedNpcCars.has(npcCar)) {
+            const currentPos = npcCar.body.translation();
+            npcCar.mesh.position.set(currentPos.x, currentPos.y, currentPos.z);
+            const currentRot = npcCar.body.rotation();
+            npcCar.mesh.quaternion.set(currentRot.x, currentRot.y, currentRot.z, currentRot.w);
+            return;
+        }
+
+        const body = npcCar.body;
+        const currentPos = body.translation();
+
+        // Simple movement in -Z direction (forward)
+        const moveSpeed = npcCar.speed * deltaTime;
+        const newZ = currentPos.z - moveSpeed; // Move forward
+
+        // Slight lateral movement for variety
+        const lateralDrift = Math.sin(performance.now() * 0.001 + npcCar.spawnZ) * 0.5 * deltaTime;
+        const newX = currentPos.x + lateralDrift;
+
+        // Keep Y at proper height
+        const newY = 0.32;
+        const physicsY = 2.0;
+
+// Update position using kinematic body
+        body.setNextKinematicTranslation({
+            x: newX,
+            y: physicsY,
+            z: newZ
+        });
+
+        // Face forward (-Z direction) with slight variation
+        const facingAngle = Math.sin(performance.now() * 0.0005 + npcCar.spawnZ) * 0.1;
+        const quat = new THREE.Quaternion();
+        quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), facingAngle);
+
+        body.setNextKinematicRotation({
+            x: quat.x,
+            y: quat.y,
+            z: quat.z,
+            w: quat.w
+        });
+
+        // Update mesh to match physics body
+        const finalPos = body.translation();
+        const visualYOffset = -1.68;
+        npcCar.mesh.position.set(finalPos.x, finalPos.y + visualYOffset, finalPos.z);
+        const finalRot = body.rotation();
+        npcCar.mesh.quaternion.set(finalRot.x, finalRot.y, finalRot.z, finalRot.w);
+    }
+
+    // Register NPC cars from WorldManager
+    registerNpcCars(npcCars) {
+        this.npcCars = npcCars;
+    }
+
+    // Set callback function for when player hits a car
+    setCarHitCallback(callback) {
+        this.carHitCallback = callback;
+    }
+
+    // Launch NPC car using Manhattan distance collision detection
+    checkNpcCollisions() {
+        if (!this.car || !this.npcCars.length) return;
+
+        const playerPos = this.car.position;
+        const collisionDistance = 4.0; // Manhattan distance threshold
+
+        for (const npcCar of this.npcCars) {
+            // Skip if already launched or no mesh
+            if (this.launchedNpcCars.has(npcCar) || !npcCar.mesh) continue;
+
+            const npcPos = npcCar.mesh.position;
+
+            // Calculate Manhattan distance
+            const manhattanDistance = Math.abs(playerPos.x - npcPos.x) +
+                Math.abs(playerPos.y - npcPos.y) +
+                Math.abs(playerPos.z - npcPos.z);
+
+            if (manhattanDistance < collisionDistance) {
+                this.launchNpcCar(npcCar);
+
+                // Call the car hit callback to update score and show popup
+                if (this.carHitCallback) {
+                    this.carHitCallback();
+                }
+            }
+        }
+    }
+
+    launchNpcCar(npcCar) {
+        if (!npcCar || !npcCar.body || this.launchedNpcCars.has(npcCar)) return;
+
+        console.log('[NPC Physics] Launching NPC car!');
+
+        // Mark as launched
+        this.launchedNpcCars.add(npcCar);
+
+        // Remove old kinematic body and create dynamic one
+        const currentPos = npcCar.body.translation();
+        const currentRot = npcCar.body.rotation();
+
+        // Remove old body
+        this.npcCarBodies.delete(npcCar);
+        this.world.removeRigidBody(npcCar.body);
+
+        // Create new dynamic body
+        const rigidBodyDesc = this.RAPIER.RigidBodyDesc.dynamic()
+            .setTranslation(currentPos.x, currentPos.y, currentPos.z)
+            .setRotation(currentRot);
+
+        const newBody = this.world.createRigidBody(rigidBodyDesc);
+
+        // Create collider
+        const colliderDesc = this.RAPIER.ColliderDesc.cuboid(1.0, 0.5, 2.0)
+            .setRestitution(0.5)
+            .setFriction(0.7)
+            .setDensity(1.0);
+
+        this.world.createCollider(colliderDesc, newBody);
+
+        // Update tracking
+        npcCar.body = newBody;
+        this.npcCarBodies.set(npcCar, newBody);
+
+        // Launch the NPC car high into the air with random velocity
+        const launchForce = {
+            x: (Math.random() - 0.5) * 50, // Random horizontal force
+            y: 40 + Math.random() * 30,    // High upward force (40-70)
+            z: (Math.random() - 0.5) * 50  // Random horizontal force
+        };
+
+        newBody.setLinvel(launchForce, true);
+
+        // Add random angular velocity for spinning effect
+        const angularVel = {
+            x: (Math.random() - 0.5) * 15,
+            y: (Math.random() - 0.5) * 15,
+            z: (Math.random() - 0.5) * 15
+        };
+
+        newBody.setAngvel(angularVel, true);
+
+        console.log('[NPC Physics] NPC car launched with force:', launchForce);
     }
 
     // Road and plane colliders removed
@@ -149,6 +359,9 @@ export class PhysicsManager {
 
             // Update car physics
             this.car.update(this.FIXED_TIMESTEP, this.world, this.eventQueue);
+
+            // Check NPC collisions using Manhattan distance
+            this.checkNpcCollisions();
 
             // Clamp car to y >= 0 and zero downward velocity
             if (this.car.position.y <= 0) {

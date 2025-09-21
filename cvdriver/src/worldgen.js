@@ -42,10 +42,18 @@ export class WorldManager {
         this.lastLeftFenceEnd = null;
         this.lastRightFenceEnd = null;
 
-    // Tree generation tracking
-    this.generatedTreeCells = new Set();
-    this.treeGroup = new THREE.Group();
-    if (this.scene) this.scene.add(this.treeGroup);
+        // Tree generation tracking
+        this.generatedTreeCells = new Set();
+        this.treeGroup = new THREE.Group();
+        if (this.scene) this.scene.add(this.treeGroup);
+
+        // NPC Car system
+        this.npcCars = []; // { mesh, roadPoint, progress, direction, speed, body }
+        this.npcCarGroup = new THREE.Group();
+        this.npcGenerationZones = new Set(); // Track where we've generated NPCs
+        this.lastNpcGenerationZ = 0; // Track last Z position where we generated NPCs
+        this.npcGenerationDistance = 50; // Generate NPCs every 50 units
+        if (this.scene) this.scene.add(this.npcCarGroup);
 
         // Coin system
         this.coinGroup = new THREE.Group();
@@ -65,12 +73,218 @@ export class WorldManager {
         this.carStatsCard = null;
         this.lastThumbCount = 0;
         this.ctrlDebug = null;
-    // Scoring
-    this.coinsCollected = 0;
-    this.scoreCard = null;
-    this.scorePopups = []; // {el, start, duration, y, vy}
+        // Scoring
+        this.coinsCollected = 0;
+        this.carsHit = 0; // Track number of cars hit by player
+        this.scoreCard = null;
+        this.scorePopups = []; // {el, start, duration, y, vy}
 
         this.init();
+    }
+
+    createNpcCarMesh(color = 0x00ccff) {
+        const group = new THREE.Group();
+        const bodyGeo = new THREE.BoxGeometry(2, 0.6, 4);
+        const bodyMat = new THREE.MeshLambertMaterial({ color, transparent: true, opacity: 1 });
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.position.y = 0.3;
+        group.add(body);
+
+        const cabinGeo = new THREE.BoxGeometry(1.6, 0.5, 1.2);
+        const cabinMat = new THREE.MeshLambertMaterial({ color: 0x222244, transparent: true, opacity: 0.6 });
+        const cab = new THREE.Mesh(cabinGeo, cabinMat);
+        cab.position.set(0, 0.75, 0.3);
+        group.add(cab);
+
+        // Add wheels
+        const wheelGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.2, 8);
+        const wheelMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+
+        // Front wheels
+        const frontLeftWheel = new THREE.Mesh(wheelGeo, wheelMat);
+        frontLeftWheel.position.set(-0.9, 0.0, -1.4);
+        frontLeftWheel.rotation.z = Math.PI / 2;
+        group.add(frontLeftWheel);
+
+        const frontRightWheel = new THREE.Mesh(wheelGeo, wheelMat);
+        frontRightWheel.position.set(0.9, 0.0, -1.4);
+        frontRightWheel.rotation.z = Math.PI / 2;
+        group.add(frontRightWheel);
+
+        // Rear wheels
+        const rearLeftWheel = new THREE.Mesh(wheelGeo, wheelMat);
+        rearLeftWheel.position.set(-0.9, 0.0, 1.4);
+        rearLeftWheel.rotation.z = Math.PI / 2;
+        group.add(rearLeftWheel);
+
+        const rearRightWheel = new THREE.Mesh(wheelGeo, wheelMat);
+        rearRightWheel.position.set(0.9, 0.0, 1.4);
+        rearRightWheel.rotation.z = Math.PI / 2;
+        group.add(rearRightWheel);
+
+        group.position.set(0, -5, 0);
+        return group;
+    }
+
+    generateNpcCarsInfinite(playerZ, physicsManager) {
+        // Generate NPCs ahead of the player
+        const generationAheadDistance = 200; // Generate NPCs 200 units ahead
+        const targetZ = playerZ - generationAheadDistance; // NPCs spawn ahead (negative Z)
+
+        // Check if we need to generate new NPCs
+        while (this.lastNpcGenerationZ > targetZ) {
+            const spawnZ = this.lastNpcGenerationZ - this.npcGenerationDistance;
+            const zoneKey = `npc_zone_${Math.floor(spawnZ / this.npcGenerationDistance)}`;
+
+            if (!this.npcGenerationZones.has(zoneKey)) {
+                this.npcGenerationZones.add(zoneKey);
+                this.generateNpcCarsAtZ(spawnZ, physicsManager);
+                console.log(`[NPC Infinite] Generated NPCs at Z: ${spawnZ.toFixed(2)}`);
+            }
+
+            this.lastNpcGenerationZ = spawnZ;
+        }
+    }
+
+    generateNpcCarsAtZ(targetZ, physicsManager) {
+        // Find road points near this Z coordinate with better search
+        let nearbyRoadPoints = [];
+
+        // Look through ALL road segments for points near targetZ (more thorough search)
+        for (const point of this.roadSegments) {
+            if (Math.abs(point.z - targetZ) < 20) { // Within 20 units of target
+                nearbyRoadPoints.push(point);
+            }
+        }
+
+        // If still no road points found, don't spawn cars here
+        if (nearbyRoadPoints.length === 0) {
+            console.log(`[NPC Infinite] No road points found near Z: ${targetZ.toFixed(2)}, skipping NPC generation`);
+            return;
+        }
+
+        // Halved spawn count: Generate fewer NPCs (0-1 cars per zone instead of 1-3)
+        const numCars = Math.random() < 0.6 ? 1 : 0; // 60% chance for 1 car, 40% chance for 0 cars
+
+        if (numCars === 0) return;
+
+        const spawnPoints = this.selectRandomPoints(nearbyRoadPoints, numCars);
+
+        for (const point of spawnPoints) {
+            this.createSingleNpcCar(point, physicsManager);
+        }
+    }
+
+    createSingleNpcCar(point, physicsManager) {
+        // Random car color
+        const colors = [0xff4444, 0x44ff44, 0x4444ff, 0xffff44, 0xff44ff, 0x44ffff, 0xffffff, 0x888888];
+        const color = colors[Math.floor(Math.random() * colors.length)];
+
+        const npcMesh = this.createNpcCarMesh(color);
+
+        // Ensure car is well above ground but STAY CLOSE TO ROAD POINT
+        const carY = 0.32;
+
+        // Reduce lateral offset to stay within 10 units of road point
+        const maxOffset = 5; // Max 5 units from road center (well within 10 unit requirement)
+        const lateralOffset = (Math.random() - 0.5) * maxOffset; // ±2.5 units lateral variation
+
+        // Place car very close to the actual road point
+        npcMesh.position.set(point.x + lateralOffset, carY, point.z);
+
+        // Face forward (-Z direction) with minimal angle variation
+        npcMesh.rotation.y = (Math.random() - 0.5) * 0.2; // Reduced random angle
+
+        this.npcCarGroup.add(npcMesh);
+
+        console.log(`[NPC Infinite] Spawned car at (${npcMesh.position.x.toFixed(2)}, ${carY.toFixed(2)}, ${point.z.toFixed(2)}) near road point (${point.x.toFixed(2)}, ${point.z.toFixed(2)})`);
+
+        // Create NPC car data
+        const npcCar = {
+            mesh: npcMesh,
+            roadPoints: [point], // Single point for simple movement
+            currentIndex: 0,
+            progress: 0,
+            speed: 20 + Math.random() * 15, // Speed between 20-35
+            direction: -1, // Always move in -Z direction
+            body: null,
+            launched: false,
+            spawnZ: point.z // Track where it was spawned
+        };
+
+        this.npcCars.push(npcCar);
+
+        // Create physics body
+        if (physicsManager) {
+            physicsManager.createNpcCarBody(npcCar);
+        }
+    }
+
+    cleanupDistantNpcCars(playerZ, physicsManager) {
+        const cleanupDistance = 300; // Remove NPCs more than 300 units behind player
+
+        for (let i = this.npcCars.length - 1; i >= 0; i--) {
+            const npc = this.npcCars[i];
+
+            // Remove NPCs that are too far behind the player
+            if (npc.mesh.position.z > playerZ + cleanupDistance) {
+                console.log(`[NPC Cleanup] Removing NPC at Z: ${npc.mesh.position.z.toFixed(2)}`);
+                this.removeNpcCar(i, physicsManager);
+            }
+        }
+
+        // Also cleanup old generation zones
+        const currentZone = Math.floor(playerZ / this.npcGenerationDistance);
+        const zonesToKeep = new Set();
+
+        // Keep recent zones
+        for (let i = currentZone - 10; i <= currentZone + 10; i++) {
+            zonesToKeep.add(`npc_zone_${i}`);
+        }
+
+        // Remove old zones
+        for (const zone of this.npcGenerationZones) {
+            if (!zonesToKeep.has(zone)) {
+                this.npcGenerationZones.delete(zone);
+            }
+        }
+    }
+
+    updateNpcCars(deltaTime, physicsManager) {
+        for (let i = this.npcCars.length - 1; i >= 0; i--) {
+            const npc = this.npcCars[i];
+
+            // Skip if physics body is missing or car is too far from player
+            if (!npc.body || !npc.mesh.visible) continue;
+
+            // Let physics manager handle NPC movement
+            if (physicsManager) {
+                physicsManager.updateNpcCar(npc, deltaTime);
+            }
+        }
+    }
+
+    removeNpcCar(index, physicsManager) {
+        const npc = this.npcCars[index];
+        if (npc) {
+            this.npcCarGroup.remove(npc.mesh);
+            if (physicsManager && npc.body) {
+                physicsManager.removeNpcCarBody(npc.body);
+            }
+            this.npcCars.splice(index, 1);
+        }
+    }
+
+    // ===== Car Hit Callback =====
+    onCarHit() {
+        this.carsHit += 1;
+        this.createScorePopup(1000);
+        console.log(`[Car Hit] Player hit car! Total cars hit: ${this.carsHit}`);
+    }
+
+    getPlayerPosition() {
+        // This will be called from the render method, so we'll need the player object
+        return this.playerPosition || new THREE.Vector3(0, 0, 0);
     }
 
     createTree(x, z, scaleJitter = 1) {
@@ -145,7 +359,7 @@ export class WorldManager {
             placeTrees(treesRight, -1); // Right side (negative perpendicular)
         }
     }
-        
+
 
     init() {
         this.setupRenderer();
@@ -167,6 +381,7 @@ export class WorldManager {
         this.scene.background = new THREE.Color(0x0096FF);
         if (this.treeGroup) this.scene.add(this.treeGroup);
         if (this.coinGroup) this.scene.add(this.coinGroup); // ensure coins group added after scene exists
+        if (this.npcCarGroup) this.scene.add(this.npcCarGroup);
     }
 
     setupCameras() {
@@ -559,6 +774,8 @@ export class WorldManager {
 
         // Add coins on this segment
         this.generateCoinClusters(points);
+
+        // NPC generation is now handled procedurally in render()
     }
 
     setupNextFrame(x, y = 0, z, angle = 0) {
@@ -678,12 +895,15 @@ export class WorldManager {
         const c = car.controls;
         this.ctrlDebug.textContent = `W:${c.forward?'1':'0'} S:${c.backward?'1':'0'} A:${c.left?'1':'0'} D:${c.right?'1':'0'} HB:${c.handbrake?'1':'0'}\nSpeed:${car.velocity.length().toFixed(2)}`;
 
-        // Score calc
-        const score = Math.floor(Math.abs(player.position.z)) + this.coinsCollected * 100;
+        // Score calc - include cars hit for bonus points
+        const score = Math.floor(Math.abs(player.position.z)) + this.coinsCollected * 100 + this.carsHit * 1000;
         if (this.scoreCard) this.scoreCard.textContent = `Score: ${score}`;
     }
 
     render(player, car, physicsManager) {
+        // Store player position for NPC distance checks
+        this.playerPosition = player.position.clone();
+
         // Generate new road segments if needed
         const newThumbCount = getLatestThumbCount();
         if (newThumbCount !== this.lastThumbCount) {
@@ -693,6 +913,21 @@ export class WorldManager {
         if (player.position.z < this.lastRoad.z + 400) {
             this.generateNewRoadSegments(this.lastRoad.x, this.lastRoad.y, this.lastRoad.z, physicsManager);
         }
+
+        // Procedurally generate NPCs ahead of the player
+        this.generateNpcCarsInfinite(player.position.z, physicsManager);
+
+        // Cleanup distant NPCs behind the player
+        this.cleanupDistantNpcCars(player.position.z, physicsManager);
+
+        // Register NPC cars and car hit callback with physics manager for collision detection
+        if (physicsManager) {
+            physicsManager.registerNpcCars(this.npcCars);
+            physicsManager.setCarHitCallback(() => this.onCarHit());
+        }
+
+        // Update NPC cars
+        this.updateNpcCars(1/60, physicsManager); // Assuming 60 FPS
 
         // Update cameras
         if (!this.usePlayerCamera) {
@@ -830,5 +1065,35 @@ export class WorldManager {
         if (this.coins.length > 200) {
             this.coins = this.coins.filter(c => !c.collected);
         }
+    }
+
+    selectRandomPoints(nearbyRoadPoints, numCars) {
+        const selected = [];
+        const attempts = numCars * 5; // Limit attempts to avoid infinite loops
+        let tries = 0;
+
+        while (selected.length < numCars && tries < attempts) {
+            const idx = Math.floor(Math.random() * nearbyRoadPoints.length);
+            const candidate = nearbyRoadPoints[idx];
+            if (selected.includes(candidate)) {
+                tries++;
+                continue; // Already selected
+            }
+            // Ensure minimum distance from already selected points
+            let tooClose = false;
+            for (const sel of selected) {
+                const distSq = (candidate.x - sel.x) ** 2 + (candidate.z - sel.z) ** 2;
+                if (distSq < 25) { // Minimum 5 units apart
+                    tooClose = true;
+                    break;
+                }
+            }
+            if (!tooClose) {
+                selected.push(candidate);
+            }
+            tries++;
+        }
+
+        return selected;
     }
 }
