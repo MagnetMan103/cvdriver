@@ -244,7 +244,8 @@ export class WorldManager {
         this.scoreCard.style.padding = '10px';
         this.scoreCard.style.backgroundColor = 'rgba(0,0,0,0.55)';
         this.scoreCard.style.fontFamily = 'monospace';
-        this.scoreCard.style.fontSize = '16px';
+        this.scoreCard.style.fontSize = '40px';
+        this.scoreCard.style.fontWeight = 'bold';
         this.scoreCard.style.color = '#FFD700';
         this.scoreCard.textContent = 'Score: 0';
         document.body.appendChild(this.scoreCard);
