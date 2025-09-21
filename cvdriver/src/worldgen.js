@@ -1,5 +1,6 @@
 // world-manager.js - Handles world generation, rendering, and visual elements
 import * as THREE from 'three';
+import {getLatestThumbCount} from "./camera.js";
 function generateRoadSchematic(initialX, initialY, initialZ = 0, initialAngle = 0) {
     // returns an array of points representing a path of the road that will be like a parabola with curves and turns
     const points = [];
@@ -60,7 +61,7 @@ export class WorldManager {
         // UI elements
         this.coordinatesCard = null;
         this.carStatsCard = null;
-        this.toggleBtn = null;
+        this.lastThumbCount = 0;
         this.ctrlDebug = null;
     // Scoring
     this.coinsCollected = 0;
@@ -197,17 +198,11 @@ export class WorldManager {
 
     setupUI() {
         // Toggle camera button
-        this.toggleBtn = document.createElement('button');
-        this.toggleBtn.textContent = 'Toggle Camera';
-        this.toggleBtn.style.position = 'absolute';
-        this.toggleBtn.style.top = '10px';
-        this.toggleBtn.style.left = '10px';
-        document.body.appendChild(this.toggleBtn);
 
         // Coordinates card
         this.coordinatesCard = document.createElement('div');
         this.coordinatesCard.style.position = 'absolute';
-        this.coordinatesCard.style.top = '10px';
+        this.coordinatesCard.style.bottom = '10px';
         this.coordinatesCard.style.right = '10px';
         this.coordinatesCard.style.padding = '10px';
         this.coordinatesCard.style.backgroundColor = 'rgba(255, 255, 255, 0.8)';
@@ -219,7 +214,7 @@ export class WorldManager {
         // Car stats card
         this.carStatsCard = document.createElement('div');
         this.carStatsCard.style.position = 'absolute';
-        this.carStatsCard.style.bottom = '10px';
+        this.carStatsCard.style.top = '10px';
         this.carStatsCard.style.right = '10px';
         this.carStatsCard.style.padding = '10px';
         this.carStatsCard.style.backgroundColor = 'rgba(255, 255, 255, 0.8)';
@@ -245,7 +240,7 @@ export class WorldManager {
         this.scoreCard = document.createElement('div');
         this.scoreCard.style.position = 'absolute';
         this.scoreCard.style.top = '10px';
-        this.scoreCard.style.left = '140px';
+        this.scoreCard.style.left = '10px';
         this.scoreCard.style.padding = '10px';
         this.scoreCard.style.backgroundColor = 'rgba(0,0,0,0.55)';
         this.scoreCard.style.fontFamily = 'monospace';
@@ -256,9 +251,6 @@ export class WorldManager {
     }
 
     setupEventListeners() {
-        this.toggleBtn.addEventListener('click', () => {
-            this.usePlayerCamera = !this.usePlayerCamera;
-        });
 
         window.addEventListener('resize', () => {
             this.overviewCamera.aspect = window.innerWidth / window.innerHeight;
@@ -633,8 +625,8 @@ export class WorldManager {
             this.setupNextFrame(0, 0, fallbackZ, 0);
         }
     }
-
     updatePlayerCamera(player) {
+
         const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(player.quaternion).normalize();
         const heightOffset = 4;
         const backDistance = 12;
@@ -664,6 +656,11 @@ export class WorldManager {
 
     render(player, car, physicsManager) {
         // Generate new road segments if needed
+        const newThumbCount = getLatestThumbCount();
+        if (newThumbCount !== this.lastThumbCount) {
+            this.usePlayerCamera = !this.usePlayerCamera;
+            this.lastThumbCount = newThumbCount;
+        }
         if (player.position.z < this.lastRoad.z + 400) {
             this.generateNewRoadSegments(this.lastRoad.x, this.lastRoad.y, this.lastRoad.z, physicsManager);
         }
