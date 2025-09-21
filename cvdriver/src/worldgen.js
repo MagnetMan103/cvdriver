@@ -9,7 +9,7 @@ function generateRoadSchematic(initialX, initialY, initialZ = 0, initialAngle = 
     let y = initialY;
     let angle = initialAngle; // Start from the provided initial angle instead of 0
 
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 100; i++) {
         z -= 20;
         angle += (Math.random() - 0.5) * 3; // random small turn
         x += Math.sin(angle) * 6; // curve effect
