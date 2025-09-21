@@ -186,7 +186,7 @@ export class WorldManager {
         const carY = 0.32;
 
         // Reduce lateral offset to stay within 10 units of road point
-        const maxOffset = 5; // Max 5 units from road center (well within 10 unit requirement)
+        const maxOffset = 2; // Max 5 units from road center (well within 10 unit requirement)
         const lateralOffset = (Math.random() - 0.5) * maxOffset; // ±2.5 units lateral variation
 
         // Place car very close to the actual road point
@@ -813,7 +813,8 @@ export class WorldManager {
 
     generateNewRoadSegments(x, y, z, physicsManager) {
         try {
-            const roadPoints = generateRoadSchematic(x, y, z);
+            const initialOffset = 20;
+            const roadPoints = generateRoadSchematic(x, y, z + initialOffset);
             if (roadPoints && Array.isArray(roadPoints)) {
                 const smoothedPoints = this.interpolateRoadPoints(roadPoints, 2);
                 smoothedPoints.forEach(point => {
@@ -911,7 +912,7 @@ export class WorldManager {
             this.lastThumbCount = newThumbCount;
         }
         if (player.position.z < this.lastRoad.z + 400) {
-            this.generateNewRoadSegments(this.lastRoad.x, this.lastRoad.y, this.lastRoad.z, physicsManager);
+            this.generateNewRoadSegments(this.lastRoad.x, this.lastRoad.y, this.lastRoad.z - 20, physicsManager);
         }
 
         // Procedurally generate NPCs ahead of the player
