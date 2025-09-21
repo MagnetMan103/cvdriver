@@ -12,6 +12,8 @@ export class PhysicsManager {
         this.player = null;
         this.obstacleBody = null;
         this.obstacleMesh = null;
+    this.scene = null; // Scene reference
+    this._foreignDebris = []; // Track spawned debris from NPC explosions for cleanup
 
         // Input handling
         this.HAND_INPUT = {
@@ -28,11 +30,25 @@ export class PhysicsManager {
         this.FIXED_TIMESTEP = 1 / 60;
         this.physicsTimeAccumulator = 0;
         this.lastTime = performance.now();
+
+        // Tunable collision launch parameters for NPC/other cars
+        this.COLLISION_LAUNCH = {
+            baseUp: 1000,      // baseline upward force component
+            randUp: 800,      // random additional upward
+            lateral: 900,     // base lateral magnitude
+            speedScaleUp: 4.0,// how much player speed amplifies upward
+            speedScaleLat: 2.0,// how much player speed amplifies lateral
+            globalMultiplier: 100, // overall scaling multiplier (crank this for farther flight)
+            spin: 25000       // torque impulse scale
+        };
     }
 
     async init(scene) {
         this.RAPIER = await import('https://cdn.skypack.dev/@dimforge/rapier3d-compat');
         await this.RAPIER.init();
+
+        // Store scene reference for creating flying cars
+        this.scene = scene;
 
         const gravity = { x: 0, y: -10, z: 0 };
         this.world = new this.RAPIER.World(gravity);
@@ -100,23 +116,19 @@ export class PhysicsManager {
 
     handleCollisions() {
         if (!this.eventQueue || !this.car) return;
-
         this.eventQueue.drainCollisionEvents((h1, h2, started) => {
             if (!started) return;
-
             const carHandle = this.car.getColliderHandle();
             if (carHandle == null) return;
-
             let other = null;
-            if (h1 === carHandle) {
-                other = h2;
-            } else if (h2 === carHandle) {
-                other = h1;
-            }
-
+            if (h1 === carHandle) other = h2; else if (h2 === carHandle) other = h1;
             if (other == null) return;
-
-            // No groundHandles check needed
+            const otherCollider = this.world.getCollider(other);
+            if (!otherCollider) return;
+            const otherRB = otherCollider.parent();
+            if (!otherRB || otherRB === this.car.body) return;
+            if (otherRB.bodyType && otherRB.bodyType() === this.RAPIER.RigidBodyType.Fixed) return;
+            this._explodeForeignBody(otherRB);
             if (this.car.shouldExplodeFromCollision(other, new Set())) {
                 this.car.explode();
             }
@@ -169,6 +181,9 @@ export class PhysicsManager {
 
             // Check obstacle collision (if obstacle exists)
             this.checkObstacleCollision();
+            
+            // Clean up foreign debris
+            this._cleanupForeignDebris();
 
             this.physicsTimeAccumulator -= this.FIXED_TIMESTEP;
         }
@@ -189,6 +204,56 @@ export class PhysicsManager {
 
     getRAPier() {
         return this.RAPIER;
+    }
+
+    _cleanupForeignDebris() {
+        if (!this._foreignDebris.length) return;
+        const now = performance.now();
+        for (let i = this._foreignDebris.length - 1; i >= 0; i--) {
+            const d = this._foreignDebris[i];
+            if (now - d.spawnTime > d.lifeMs) {
+                try { this.world.removeRigidBody(d.body); } catch(e) {}
+                if (d.mesh && this.scene) this.scene.remove(d.mesh);
+                this._foreignDebris.splice(i,1);
+            } else {
+                // sync mesh transform
+                const t = d.body.translation();
+                const r = d.body.rotation();
+                d.mesh.position.set(t.x,t.y,t.z);
+                d.mesh.quaternion.set(r.x,r.y,r.z,r.w);
+            }
+        }
+    }
+
+    _explodeForeignBody(body) {
+        if (!this.scene || !body) return;
+        const pos = body.translation();
+        try { this.world.removeRigidBody(body); } catch(e) {}
+        const pieceCount = 14 + Math.floor(Math.random()*6);
+        for (let i=0;i<pieceCount;i++) {
+            const size = 0.3 + Math.random()*0.4;
+            const geo = new THREE.BoxGeometry(size,size,size);
+            const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(Math.random(),0.7,0.55), metalness:0.3, roughness:0.6 });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(pos.x, pos.y + 0.5, pos.z);
+            this.scene.add(mesh);
+            const rbDesc = this.RAPIER.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y + 0.5, pos.z);
+            const rb = this.world.createRigidBody(rbDesc);
+            const colDesc = this.RAPIER.ColliderDesc.cuboid(size/2,size/2,size/2).setRestitution(0.5).setFriction(0.6);
+            this.world.createCollider(colDesc, rb);
+            const impulseScale = 55;
+            rb.applyImpulse({
+                x:(Math.random()-0.5)*impulseScale,
+                y:Math.random()*impulseScale*0.9 + 18,
+                z:(Math.random()-0.5)*impulseScale
+            }, true);
+            rb.applyTorqueImpulse({
+                x:(Math.random()-0.5)*400,
+                y:(Math.random()-0.5)*400,
+                z:(Math.random()-0.5)*400
+            }, true);
+            this._foreignDebris.push({ body: rb, mesh, spawnTime: performance.now(), lifeMs: 8000 + Math.random()*4000 });
+        }
     }
 
     // Create obstacle (unchanged)

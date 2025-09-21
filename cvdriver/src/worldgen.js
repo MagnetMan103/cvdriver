@@ -66,6 +66,17 @@ export class WorldManager {
     this.coinsCollected = 0;
     this.scoreCard = null;
     this.scorePopups = []; // {el, start, duration, y, vy}
+    // NPC traffic cars (same direction as player)
+    // Lightweight kinematic meshes that spawn ahead, drive forward (negative z like player) but more slowly.
+    // Player can catch up and collide, launching NPC car out of view and awarding bonus points.
+        this.npcCars = []; // {mesh, speed, dir, active, hit}
+    this.npcSpawnZInterval = 70; // tighter interval for higher density
+    this.nextNpcSpawnZ = -120; // world z (negative) threshold to trigger next spawn check
+    this.npcLaneOffset = 2.2; // spawn lanes nearer center (road ~12 wide) so stay inside fences
+    this.npcBaseSpeed = 10; // slow cruising speed (player generally faster)
+    this.npcMaxCount = 14; // allow more simultaneous cars
+    this.npcDespawnDistance = 150; // distance behind player to remove
+        this.npcScoreBonus = 1000;
 
         this.init();
     }
@@ -557,6 +568,40 @@ export class WorldManager {
         this.generateCoinClusters(points);
     }
 
+    // === Road helper utilities for NPC lane positioning ===
+    _getRoadSegmentAtZ(targetZ) {
+        if (this.roadSegments.length < 2) return null;
+        for (let i=0; i< this.roadSegments.length-1; i++) {
+            const a = this.roadSegments[i];
+            const b = this.roadSegments[i+1];
+            // Segments progress toward more negative z; check if targetZ lies between (inclusive)
+            if ((a.z >= targetZ && b.z <= targetZ) || (a.z <= targetZ && b.z >= targetZ)) {
+                return { a, b, index: i };
+            }
+        }
+        return null;
+    }
+    _interpolatePoint(a, b, t) {
+        return {
+            x: a.x + (b.x - a.x)*t,
+            y: (a.y||0) + ((b.y||0) - (a.y||0))*t,
+            z: a.z + (b.z - a.z)*t
+        };
+    }
+    _getRoadBasisAtZ(targetZ) {
+        const seg = this._getRoadSegmentAtZ(targetZ);
+        if (!seg) return null;
+        const { a, b } = seg;
+        const dz = b.z - a.z;
+        const t = dz === 0 ? 0 : (targetZ - a.z) / dz;
+        const p = this._interpolatePoint(a, b, t);
+        // Forward vector along segment
+        const forward = new THREE.Vector3(b.x - a.x, 0, b.z - a.z).normalize();
+        if (forward.lengthSq() === 0) forward.set(0,0,-1);
+        const perp = new THREE.Vector3(-forward.z, 0, forward.x).normalize();
+        return { point: p, forward, perp };
+    }
+
     setupNextFrame(x, y = 0, z, angle = 0) {
         this.roadSegments.push({ x, y, z, angle });
     }
@@ -658,11 +703,12 @@ export class WorldManager {
         this.ctrlDebug.textContent = `W:${c.forward?'1':'0'} S:${c.backward?'1':'0'} A:${c.left?'1':'0'} D:${c.right?'1':'0'} HB:${c.handbrake?'1':'0'}\nSpeed:${car.velocity.length().toFixed(2)}`;
 
         // Score calc
-        const score = Math.floor(Math.abs(player.position.z)) + this.coinsCollected * 100;
+        // Base score from distance and coins. Opposite car hits add to coinsCollectedBonus which we fold in.
+        const score = Math.floor(Math.abs(player.position.z)) + this.coinsCollected * 100 + (this._npcHitBonus || 0);
         if (this.scoreCard) this.scoreCard.textContent = `Score: ${score}`;
     }
 
-    render(player, car, physicsManager) {
+    render(player, car, physicsManager, frameDelta = 0) {
         // Generate new road segments if needed
         if (player.position.z < this.lastRoad.z + 400) {
             this.generateNewRoadSegments(this.lastRoad.x, this.lastRoad.y, this.lastRoad.z, physicsManager);
@@ -687,6 +733,8 @@ export class WorldManager {
         this.updateCoins(car);
         // Update score popups
         this.updateScorePopups();
+        // Update NPC opposite-direction cars
+        this.updateNpcCars(player, car, frameDelta);
 
         // Render scene
         const camera = this.usePlayerCamera ? this.playerCamera : this.overviewCamera;
@@ -803,6 +851,176 @@ export class WorldManager {
         // Optionally prune collected coins array over time
         if (this.coins.length > 200) {
             this.coins = this.coins.filter(c => !c.collected);
+        }
+    }
+
+    // ================= Opposite Direction NPC Cars =================
+    createNpcCarMesh(color=0x00ccff) {
+        const group = new THREE.Group();
+        const bodyGeo = new THREE.BoxGeometry(2,0.6,4);
+        const bodyMat = new THREE.MeshLambertMaterial({color, transparent:true, opacity:1});
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.position.y = 0.3;
+        group.add(body);
+        const cabinGeo = new THREE.BoxGeometry(1.6,0.5,1.2);
+        const cabinMat = new THREE.MeshLambertMaterial({color:0x222244, transparent:true, opacity:0.6});
+        const cab = new THREE.Mesh(cabinGeo, cabinMat);
+        cab.position.set(0,0.75,0.3);
+        group.add(cab);
+        group.position.set(0,0.5,0);
+        return group;
+    }
+
+    trySpawnNpc(player) {
+        if (this.npcCars.length >= this.npcMaxCount) return;
+        if (player.position.z > this.nextNpcSpawnZ) return;
+        // Schedule next spawn further ahead (more negative), random small jitter for organic spacing
+        this.nextNpcSpawnZ -= this.npcSpawnZInterval + Math.random()*30;
+        const baseSpawnZ = player.position.z - (160 + Math.random()*120);
+        const roadBasis = this._getRoadBasisAtZ(baseSpawnZ);
+        if (!roadBasis) return; // no road context yet
+        const lanePerp = roadBasis.perp; // lateral axis relative to curve
+        // Spawn a small cluster (1-3 cars) in adjacent pseudo-lanes if space allows
+        const clusterCount = 1 + Math.floor(Math.random()*3); // 1-3
+        const usedLanes = new Set();
+        for (let c=0; c<clusterCount; c++) {
+            if (this.npcCars.length >= this.npcMaxCount) break;
+            let laneIndex; // choose -1,0,1 first then possibly +/-2 within road width
+            const laneOptions = [0, -1, 1, -2, 2];
+            let attempts = 0;
+            while (attempts < laneOptions.length) {
+                const idx = laneOptions[Math.floor(Math.random()*laneOptions.length)];
+                if (!usedLanes.has(idx)) { laneIndex = idx; break; }
+                attempts++;
+            }
+            if (laneIndex == null) laneIndex = 0;
+            usedLanes.add(laneIndex);
+            const laneWidth = 1.9; // spacing between pseudo-lanes
+            const lateralOffset = laneIndex * laneWidth + (Math.random()-0.5)*0.4; // small jitter
+            const spawnZ = baseSpawnZ - Math.random()*12; // slight longitudinal variation inside cluster
+            const laneBasis = this._getRoadBasisAtZ(spawnZ) || roadBasis;
+            const center = laneBasis.point; // center of road at that Z
+            // Road width assumed ~12, keep cars within +/- (roadWidth/2 - margin)
+            const roadHalf = 6; // half of 12
+            const margin = 1.2; // keep away from fences
+            const maxLateral = roadHalf - margin;
+            const clampedLat = Math.max(-maxLateral, Math.min(maxLateral, lateralOffset));
+            const spawnPos = new THREE.Vector3(center.x, 0.5, center.z).add(laneBasis.perp.clone().multiplyScalar(clampedLat));
+            // Prevent overlap with existing NPCs near spawn point
+            let tooClose = false;
+            for (const other of this.npcCars) {
+                const dz = Math.abs(other.mesh.position.z - spawnPos.z);
+                const dx = Math.abs(other.mesh.position.x - spawnPos.x);
+                if (dz < 5 && dx < 2.2) { tooClose = true; break; }
+            }
+            if (tooClose) continue;
+            const mesh = this.createNpcCarMesh(0x0066aa + Math.floor(Math.random()*0x0099ff));
+            mesh.position.copy(spawnPos);
+            this.scene.add(mesh);
+            const speed = this.npcBaseSpeed * (0.65 + Math.random()*0.5);
+            this.npcCars.push({ mesh, speed, dir: -1, active:true, hit:false, vx: (Math.random()-0.5)*0.4 });
+        }
+    }
+
+    updateNpcCars(player, car, dt) {
+        if (!dt) return;
+        if (!this._npcHitBonus) this._npcHitBonus = 0;
+        // Attempt spawn
+        this.trySpawnNpc(player);
+        const playerPos = player.position;
+        const carPos = car.position;
+        for (let i = this.npcCars.length -1; i>=0; i--) {
+            const npc = this.npcCars[i];
+            if (!npc.active) continue;
+            // Move same direction as player: decreasing z
+            npc.mesh.position.z -= npc.speed * dt;
+            npc.mesh.position.x += npc.vx * dt;
+            // Clamp using road basis so cars follow curved road centerline
+            const basis = this._getRoadBasisAtZ(npc.mesh.position.z);
+            if (basis) {
+                const center = new THREE.Vector3(basis.point.x, npc.mesh.position.y, basis.point.z);
+                const rel = npc.mesh.position.clone().sub(center);
+                // Project rel onto lateral axis
+                const lateralAxis = basis.perp.clone().normalize();
+                const lateralDist = rel.dot(lateralAxis);
+                const roadHalf = 6; // should match spawn assumption
+                const margin = 1.2;
+                const maxLat = roadHalf - margin;
+                let clampedLat = Math.max(-maxLat, Math.min(maxLat, lateralDist));
+                // Reflect velocity if we clamp hard
+                if (clampedLat !== lateralDist) npc.vx = -npc.vx * 0.6;
+                // Reconstruct position: center + lateralAxis * clampedLat plus any forward component leftover
+                const forwardAxis = basis.forward.clone().normalize();
+                const forwardComp = rel.dot(forwardAxis);
+                npc.mesh.position.copy(center
+                    .add(lateralAxis.multiplyScalar(clampedLat))
+                    .add(forwardAxis.multiplyScalar(forwardComp)));
+            }
+            // Despawn if far behind player
+            if (npc.mesh.position.z > playerPos.z + this.npcDespawnDistance) {
+                this.scene.remove(npc.mesh);
+                this.npcCars.splice(i,1);
+                continue;
+            }
+            // Collision with player car (sphere/box approx)
+            const dx = npc.mesh.position.x - carPos.x;
+            const dz = npc.mesh.position.z - carPos.z;
+            const distSq = dx*dx + dz*dz;
+            const hitRadius = 2.5; // sum approximate radii
+            if (!npc.hit && distSq < hitRadius*hitRadius) {
+                npc.hit = true;
+                npc.active = false;
+                // Award score bonus
+                this._npcHitBonus += this.npcScoreBonus;
+                this.createScorePopup(this.npcScoreBonus);
+                // Determine lateral direction relative to road to send car off side
+                const basisForHit = this._getRoadBasisAtZ(npc.mesh.position.z);
+                const lateralAxis = basisForHit ? basisForHit.perp.clone().normalize() : new THREE.Vector3(1,0,0);
+                const sideSign = (npc.mesh.position.x >= carPos.x) ? 1 : -1; // fly outward from player relative position
+                // Apply fly-away impulse: upward + forward + lateral
+                npc.vy = 18 + Math.random()*6;
+                const lateralSpeed = 22 + Math.random()*12;
+                const forwardSpeed = 10 + Math.random()*8;
+                const lateralVec = lateralAxis.multiplyScalar(lateralSpeed * sideSign);
+                npc.vx = lateralVec.x; // override vx for clean side blast
+                npc.vz = forwardSpeed; // forward (increase z) so it exits ahead
+                // Rotational spin
+                npc.rotSpeed = new THREE.Vector3((Math.random()-0.5)*6, (Math.random()-0.5)*4, (Math.random()-0.5)*6);
+                npc.flyTime = 0;
+                npc.flyDuration = 2.8 + Math.random()*0.7; // total animation length
+                npc.startScale = npc.mesh.scale.clone();
+                // Store materials for fade
+                npc.materials = [];
+                npc.mesh.traverse(obj => { if (obj.isMesh && obj.material) npc.materials.push(obj.material); });
+            }
+            // If in fly-away state
+            if (npc.hit) {
+                npc.flyTime += dt;
+                const tNorm = npc.flyTime / (npc.flyDuration || 3);
+                npc.vy -= 32 * dt; // gravity
+                npc.mesh.position.x += npc.vx * dt;
+                npc.mesh.position.y += npc.vy * dt;
+                npc.mesh.position.z += npc.vz * dt;
+                npc.mesh.rotation.x += npc.rotSpeed.x * dt;
+                npc.mesh.rotation.y += npc.rotSpeed.y * dt;
+                npc.mesh.rotation.z += npc.rotSpeed.z * dt;
+                // Fade + scale out after 40% of lifetime
+                if (npc.materials) {
+                    const fadeStart = 0.4;
+                    if (tNorm > fadeStart) {
+                        const fadeT = (tNorm - fadeStart) / (1 - fadeStart);
+                        const opacity = Math.max(0, 1 - fadeT);
+                        for (const m of npc.materials) { if (m.transparent) m.opacity = opacity; }
+                        const scaleEase = 1 + fadeT * 1.4; // enlarge as it fades
+                        npc.mesh.scale.set(npc.startScale.x*scaleEase, npc.startScale.y*scaleEase, npc.startScale.z*scaleEase);
+                    }
+                }
+                if (npc.mesh.position.y < -10 || tNorm >= 1) {
+                    this.scene.remove(npc.mesh);
+                    this.npcCars.splice(i,1);
+                    continue;
+                }
+            }
         }
     }
 }

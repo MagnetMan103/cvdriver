@@ -51,7 +51,8 @@ class Game {
         this.physicsManager.update(frameDelta);
 
         // Update world/rendering
-        this.worldManager.render(this.player, this.car, this.physicsManager);
+    // Pass frameDelta so world manager can advance NPC cars and timers
+    this.worldManager.render(this.player, this.car, this.physicsManager, frameDelta);
 
         // Continue animation loop
         requestAnimationFrame(() => this.animate());
