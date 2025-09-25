@@ -134,7 +134,6 @@ export class PhysicsManager {
         const newX = currentPos.x + lateralDrift;
 
         // Keep Y at proper height
-        const newY = 0.32;
         const physicsY = 2.0;
 
 // Update position using kinematic body
@@ -379,6 +378,15 @@ export class PhysicsManager {
                 // Only preserve yaw (rotation around y axis)
                 this.car.body.setRotation({ x: 0, y: currentRot.y, z: 0, w: currentRot.w }, true);
             }
+            if (this.car.position.z > 1) {
+                this.car.position.z = 1;
+                this.car.body.setTranslation({ x: this.car.position.x, y: this.car.position.y, z: 1}, true);
+                const linvel = this.car.body.linvel();
+                if (linvel.z > 0) {
+                    this.car.body.setLinvel({ x: linvel.x, y: linvel.y, z: 0 }, true);
+                }
+            }
+
 
             // Handle collisions
             this.handleCollisions();

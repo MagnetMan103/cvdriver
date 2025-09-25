@@ -12,7 +12,7 @@ function generateRoadSchematic(initialX, initialY, initialZ = 0, initialAngle = 
     let y = initialY;
     let angle = initialAngle; // Start from the provided initial angle instead of 0
 
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 20; i++) {
         z -= 20;
         angle += (Math.random() - 0.5) * 3; // random small turn
         x += Math.sin(angle) * 6; // curve effect
@@ -713,8 +713,8 @@ export class WorldManager {
         const { leftFencePoints, rightFencePoints } = this.generateFencePoints(roadPoints);
 
         // Connect with previous fence points if they exist
-        let finalLeftPoints = [...leftFencePoints];
-        let finalRightPoints = [...rightFencePoints];
+        let finalLeftPoints = [...leftFencePoints.slice(1)];
+        let finalRightPoints = [...rightFencePoints.slice(1)];
 
         if (this.lastLeftFenceEnd && this.lastRightFenceEnd) {
             // Add connecting points to ensure continuity
@@ -1043,7 +1043,7 @@ export class WorldManager {
     updateCoins(car) {
         if (!car || !this.coins.length) return;
         const carPos = car.position; // Vector3 from car object
-        const collectRadiusSq = 1.2 * 1.2;
+        const collectRadiusSq = 2.5**2;
         const time = performance.now() * 0.001;
         for (const coin of this.coins) {
             if (coin.collected) continue;
