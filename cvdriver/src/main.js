@@ -3,6 +3,9 @@ import { WorldManager } from './worldgen.js';
 import { PhysicsManager } from './physics.js';
 import { getLatestThumbCount } from './camera.js';
 import { audio } from './audio.js';
+import { inject } from '@vercel/analytics';
+
+inject(); // Initialize Vercel Analytics
 
 class Game {
     constructor() {
@@ -22,7 +25,7 @@ class Game {
             this.car = car;
             this.player = player;
             this.isInitialized = true;
-            console.log('Game initialized successfully');
+            //console.log('Game initialized successfully');
             this.animate();
         } catch (error) {
             console.error('Failed to initialize game:', error);
@@ -45,7 +48,7 @@ class Game {
 
 function pollThumbsUpToStart(game, startScreen, gameScreen) {
     const thumbCount = getLatestThumbCount();
-    console.log('Thumb count:', thumbCount);
+    //console.log('Thumb count:', thumbCount);
     if (startScreen.style.display === 'block' && gameScreen.style.display === 'none') {
         if (thumbCount > 0) {
             startScreen.style.display = 'none';
@@ -64,7 +67,6 @@ window.addEventListener('DOMContentLoaded', () => {
     const endScreen = document.getElementById('end');
     const startBtn = document.getElementById('start-button');
     const restartBtn = document.getElementById('restart-button');
-    const canvas = document.getElementById('three-canvas');
     const startingVid = document.getElementById('startingvid');
 
     // Show camera feed in #startingvid

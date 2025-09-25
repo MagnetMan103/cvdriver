@@ -65,7 +65,7 @@ export class PhysicsManager {
         const position = npcCar.mesh.position;
         const rotation = npcCar.mesh.rotation;
 
-        console.log(`[NPC Physics] Creating body at (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
+        //console.log(`[NPC Physics] Creating body at (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
 
         // Create kinematic rigid body for NPC car (easier to control movement)
         const rigidBodyDesc = this.RAPIER.RigidBodyDesc.kinematicPositionBased()
@@ -89,7 +89,7 @@ export class PhysicsManager {
         npcCar.body = rigidBody;
         this.npcCarBodies.set(npcCar, rigidBody);
 
-        console.log(`[NPC Physics] Created body with handle ${collider.handle}`);
+        //console.log(`[NPC Physics] Created body with handle ${collider.handle}`);
 
         return rigidBody;
     }
@@ -207,7 +207,7 @@ export class PhysicsManager {
     launchNpcCar(npcCar) {
         if (!npcCar || !npcCar.body || this.launchedNpcCars.has(npcCar)) return;
 
-        console.log('[NPC Physics] Launching NPC car!');
+        //console.log('[NPC Physics] Launching NPC car!');
 
         // Mark as launched
         this.launchedNpcCars.add(npcCar);
@@ -257,16 +257,7 @@ export class PhysicsManager {
 
         newBody.setAngvel(angularVel, true);
 
-        console.log('[NPC Physics] NPC car launched with force:', launchForce);
-    }
-
-    // Road and plane colliders removed
-    addRoadColliders(points) {
-        // No-op
-    }
-
-    addGridColliders(points) {
-        // No-op
+        //console.log('[NPC Physics] NPC car launched with force:', launchForce);
     }
 
     addFenceCollider(start, end, height = 2, thickness = 0.2) {

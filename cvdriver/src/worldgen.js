@@ -140,7 +140,7 @@ export class WorldManager {
             if (!this.npcGenerationZones.has(zoneKey)) {
                 this.npcGenerationZones.add(zoneKey);
                 this.generateNpcCarsAtZ(spawnZ, physicsManager);
-                console.log(`[NPC Infinite] Generated NPCs at Z: ${spawnZ.toFixed(2)}`);
+                //console.log(`[NPC Infinite] Generated NPCs at Z: ${spawnZ.toFixed(2)}`);
             }
 
             this.lastNpcGenerationZ = spawnZ;
@@ -160,7 +160,7 @@ export class WorldManager {
 
         // If still no road points found, don't spawn cars here
         if (nearbyRoadPoints.length === 0) {
-            console.log(`[NPC Infinite] No road points found near Z: ${targetZ.toFixed(2)}, skipping NPC generation`);
+            //console.log(`[NPC Infinite] No road points found near Z: ${targetZ.toFixed(2)}, skipping NPC generation`);
             return;
         }
 
@@ -198,7 +198,7 @@ export class WorldManager {
 
         this.npcCarGroup.add(npcMesh);
 
-        console.log(`[NPC Infinite] Spawned car at (${npcMesh.position.x.toFixed(2)}, ${carY.toFixed(2)}, ${point.z.toFixed(2)}) near road point (${point.x.toFixed(2)}, ${point.z.toFixed(2)})`);
+        //console.log(`[NPC Infinite] Spawned car at (${npcMesh.position.x.toFixed(2)}, ${carY.toFixed(2)}, ${point.z.toFixed(2)}) near road point (${point.x.toFixed(2)}, ${point.z.toFixed(2)})`);
 
         // Create NPC car data
         const npcCar = {
@@ -229,7 +229,7 @@ export class WorldManager {
 
             // Remove NPCs that are too far behind the player
             if (npc.mesh.position.z > playerZ + cleanupDistance) {
-                console.log(`[NPC Cleanup] Removing NPC at Z: ${npc.mesh.position.z.toFixed(2)}`);
+                //console.log(`[NPC Cleanup] Removing NPC at Z: ${npc.mesh.position.z.toFixed(2)}`);
                 this.removeNpcCar(i, physicsManager);
             }
         }
@@ -280,7 +280,7 @@ export class WorldManager {
     onCarHit() {
         this.carsHit += 1;
         this.createScorePopup(1000);
-        console.log(`[Car Hit] Player hit car! Total cars hit: ${this.carsHit}`);
+        //console.log(`[Car Hit] Player hit car! Total cars hit: ${this.carsHit}`);
     }
 
     getPlayerPosition() {
@@ -763,9 +763,6 @@ export class WorldManager {
 
         // Add grids
         this.addGridsForRoadPoints(points);
-
-        // Add physics colliders through physics manager
-        physicsManager.addRoadColliders(points);
 
         // Add continuous fences
         this.addContinuousFences(points, physicsManager);

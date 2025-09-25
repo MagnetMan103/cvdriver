@@ -9,8 +9,6 @@ const video = document.getElementById('video');
 const overlay = document.getElementById('overlay');
 const overlayCtx = overlay.getContext('2d');
 
-const threeContainer = document.getElementById('three-container');
-
 let scene, camera, renderer, wheel;
 let hands;
 let mpCanvas, mpCtx; // offscreen canvas used to feed mirrored frames to MediaPipe
@@ -337,10 +335,6 @@ function onResults(results) {
     const midX = (a.x + b.x) / 2;
     const midY = (a.y + b.y) / 2;
 
-    // map pixel coordinates to Three.js NDC-ish coordinates roughly
-    const w = renderer.domElement.clientWidth;
-    const h = renderer.domElement.clientHeight;
-
     const ndcX = (midX / overlay.width) * 2 - 1;
     const ndcY = -((midY / overlay.height) * 2 - 1);
 
@@ -468,7 +462,7 @@ async function init() {
       });
       await cam.start();
       // occasionally the camera helper may not expose frames until permissions approved
-      console.log('MediaPipe Camera started');
+      //console.log('MediaPipe Camera started');
       drawStatus('Camera started (MediaPipe Camera)');
       // start a small debug loop to draw the video into overlay for visibility
       (function debugDraw() {
