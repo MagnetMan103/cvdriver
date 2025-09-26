@@ -702,11 +702,7 @@ export class WorldManager {
             rightFencePoints.push(rightPoint);
         }
 
-        // Remove self-intersections from both fence lines
-        const cleanedLeftPoints = this.removeSelfIntersections(leftFencePoints);
-        const cleanedRightPoints = this.removeSelfIntersections(rightFencePoints);
-
-        return { leftFencePoints: cleanedLeftPoints, rightFencePoints: cleanedRightPoints };
+        return { leftFencePoints: leftFencePoints, rightFencePoints: rightFencePoints };
     }
 
     addContinuousFences(roadPoints, physicsManager) {
@@ -720,6 +716,12 @@ export class WorldManager {
             // Add connecting points to ensure continuity
             finalLeftPoints.unshift(this.lastLeftFenceEnd);
             finalRightPoints.unshift(this.lastRightFenceEnd);
+        } else {
+            // If no previous end, just use current points
+            leftFencePoints[0].z += 5
+            rightFencePoints[0].z += 5;
+            finalLeftPoints = [leftFencePoints[0],...finalLeftPoints];
+            finalRightPoints = [rightFencePoints[0],...finalRightPoints];
         }
 
         // Create continuous fence meshes
